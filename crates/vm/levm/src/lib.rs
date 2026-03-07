@@ -1,3 +1,4 @@
+#![cfg_attr(not(feature = "std"), no_std)]
 //! # LEVM - Lambda EVM
 //!
 //! A pure Rust implementation of the Ethereum Virtual Machine.
@@ -64,6 +65,12 @@
 //! }
 //! ```
 
+extern crate alloc;
+
+
+#[allow(unused_imports)]
+pub(crate) mod sync_compat;
+
 pub mod call_frame;
 pub mod constants;
 pub mod db;
@@ -76,7 +83,45 @@ pub mod hooks;
 pub mod memory;
 pub mod opcode_handlers;
 pub mod opcodes;
+#[cfg(feature = "std")]
 pub mod precompiles;
+#[cfg(not(feature = "std"))]
+pub mod precompiles {
+    //! Stub precompiles module for no_std builds.
+    //! In zkVM contexts, precompiles are handled by the host.
+    use alloc::vec::Vec;
+    use bytes::Bytes;
+    use crate::errors::{ExceptionalHalt, VMError};
+    use crate::vm::VMType;
+    use ethrex_common::{Address, types::Fork};
+
+    #[derive(Default)]
+    pub struct PrecompileCache;
+
+    impl PrecompileCache {
+        pub fn new() -> Self {
+            Self
+        }
+    }
+
+    pub fn is_precompile(_address: &Address, _fork: Fork, _vm_type: VMType) -> bool {
+        false
+    }
+
+    pub fn execute_precompile(
+        _address: Address,
+        _calldata: &Bytes,
+        _gas_remaining: &mut u64,
+        _fork: Fork,
+        _cache: Option<&PrecompileCache>,
+    ) -> Result<Bytes, VMError> {
+        Err(VMError::ExceptionalHalt(ExceptionalHalt::InvalidOpcode))
+    }
+
+    pub const SIZE_PRECOMPILES_PRE_CANCUN: u64 = 9;
+    pub const SIZE_PRECOMPILES_CANCUN: u64 = 10;
+    pub const SIZE_PRECOMPILES_PRAGUE: u64 = 17;
+}
 pub mod tracing;
 pub mod utils;
 pub mod vm;

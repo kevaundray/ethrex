@@ -1,3 +1,5 @@
+use alloc::string::ToString;
+use crate::sync_compat::{Arc, Mutex, MutexGuard};
 use crate::{EvmError, VmDatabase};
 use ethrex_common::{
     Address, H256, U256,
@@ -6,7 +8,6 @@ use ethrex_common::{
         block_execution_witness::{GuestProgramState, GuestProgramStateError},
     },
 };
-use std::sync::{Arc, Mutex, MutexGuard};
 
 #[derive(Clone)]
 pub struct GuestProgramStateWrapper {

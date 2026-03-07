@@ -1,4 +1,5 @@
-use std::mem;
+use alloc::{string::ToString, vec, vec::Vec};
+use core::mem;
 
 use ethrex_rlp::encode::RLPEncode;
 

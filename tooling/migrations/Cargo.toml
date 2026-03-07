@@ -9,7 +9,7 @@ license.workspace = true
 [dependencies]
 clap.workspace = true
 ethrex-blockchain.workspace = true
-ethrex-common.workspace = true
+ethrex-common = { workspace = true, features = ["std"] }
 ethrex-common-libmdbx = { git = "https://github.com/lambdaclass/ethrex", tag = "v1.0.0", package = "ethrex-common" }
 ethrex-storage-libmdbx = { features = [
     "libmdbx",

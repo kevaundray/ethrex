@@ -1,5 +1,9 @@
+#![cfg_attr(not(feature = "std"), no_std)]
+extern crate alloc;
+
 pub mod common;
 pub mod l1;
+#[cfg(feature = "l2")]
 pub mod l2;
 pub mod methods;
 

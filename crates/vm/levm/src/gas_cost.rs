@@ -8,7 +8,9 @@ use ExceptionalHalt::OutOfGas;
 use bytes::Bytes;
 /// Contains the gas costs of the EVM instructions
 use ethrex_common::{U256, types::Fork};
+#[cfg(feature = "std")]
 use malachite::base::num::logic::traits::*;
+#[cfg(feature = "std")]
 use malachite::{Natural, base::num::basic::traits::Zero as _};
 
 // Opcodes cost
@@ -798,6 +800,7 @@ pub fn identity(data_size: usize) -> Result<u64, VMError> {
     precompile(data_size, IDENTITY_STATIC_COST, IDENTITY_DYNAMIC_BASE)
 }
 
+#[cfg(feature = "std")]
 pub fn modexp(
     exponent_first_32_bytes: &Natural,
     base_size: usize,

@@ -1,10 +1,14 @@
+use alloc::vec::Vec;
+
 use crate::{
     H256,
     types::{BlobsBundle, balance_diff::BalanceDiff},
 };
+#[cfg(feature = "std")]
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Serialize, Deserialize, Debug, Default)]
+#[derive(Clone, Debug, Default)]
+#[cfg_attr(feature = "std", derive(Serialize, Deserialize))]
 pub struct Batch {
     pub number: u64,
     pub first_block: u64,

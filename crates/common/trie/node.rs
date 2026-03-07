@@ -2,7 +2,8 @@ mod branch;
 mod extension;
 mod leaf;
 
-use std::sync::{Arc, OnceLock};
+use alloc::{boxed::Box, sync::Arc, vec::Vec};
+use crate::sync_compat::OnceLock;
 
 pub use branch::BranchNode;
 use ethrex_rlp::{decode::RLPDecode, encode::RLPEncode};
@@ -12,9 +13,10 @@ use rkyv::{
     de::Pooling,
     rancor::Source,
     ser::{Allocator, Sharing, Writer},
-    validation::{ArchiveContext, SharedContext},
     with::Skip,
 };
+#[cfg(feature = "std")]
+use rkyv::validation::{ArchiveContext, SharedContext};
 
 use crate::{NodeRLP, TrieDB, error::TrieError, nibbles::Nibbles};
 
@@ -35,7 +37,7 @@ use super::{ValueRLP, node_hash::NodeHash};
 )]
 #[rkyv(serialize_bounds(__S: Writer + Allocator + Sharing, __S::Error: Source))]
 #[rkyv(deserialize_bounds(__D: Pooling, __D::Error: Source))]
-#[rkyv(bytecheck(bounds(__C: ArchiveContext + SharedContext)))]
+#[cfg_attr(feature = "std", rkyv(bytecheck(bounds(__C: ArchiveContext + SharedContext))))]
 pub enum NodeRef {
     /// The node is embedded within the reference.
     Node(

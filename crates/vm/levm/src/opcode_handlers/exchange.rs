@@ -10,7 +10,7 @@ use crate::{
     opcode_handlers::OpcodeHandler,
     vm::VM,
 };
-use std::mem;
+use core::mem;
 
 /// Implementation for the `SWAPn` opcodes.
 pub struct OpSwapHandler<const N: usize>;

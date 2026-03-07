@@ -9,12 +9,12 @@ license.workspace = true
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-ethrex-common.workspace = true
-ethrex-crypto.workspace = true
+ethrex-common = { workspace = true, features = ["std"] }
+ethrex-crypto = { workspace = true, features = ["std"] }
 ethrex-blockchain.workspace = true
-ethrex-rlp.workspace = true
+ethrex-rlp = { workspace = true, features = ["std"] }
 ethrex-storage.workspace = true
-ethrex-trie.workspace = true
+ethrex-trie = { workspace = true, features = ["std"] }
 ethrex-storage-rollup = { workspace = true, optional = true }
 ethrex-l2-common = { workspace = true, optional = true }
 ethereum-types.workspace = true
@@ -24,12 +24,12 @@ async-trait.workspace = true
 tracing.workspace = true
 tokio = { workspace = true, features = ["full"] }
 tokio-util = { workspace = true, features = ["codec", "net"] }
-bytes.workspace = true
+bytes = { workspace = true, features = ["serde"] }
 hex.workspace = true
-thiserror.workspace = true
+thiserror = { workspace = true, features = ["std"] }
 lazy_static.workspace = true
 snap.workspace = true
-serde.workspace = true
+serde = { workspace = true, features = ["std"] }
 secp256k1.workspace = true
 spawned-rt.workspace = true
 spawned-concurrency.workspace = true

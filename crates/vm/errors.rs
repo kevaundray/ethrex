@@ -1,3 +1,4 @@
+use alloc::string::{String, ToString};
 use ethrex_levm::errors::{DatabaseError as LevmDatabaseError, InternalError, VMError};
 use thiserror::Error;
 

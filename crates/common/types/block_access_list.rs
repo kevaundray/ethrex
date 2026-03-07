@@ -1,3 +1,6 @@
+use alloc::{format, string::String, vec::Vec};
+use alloc::collections::{BTreeMap, BTreeSet};
+
 use bytes::{BufMut, Bytes};
 use ethereum_types::{Address, H256, U256};
 use ethrex_rlp::{
@@ -5,9 +8,9 @@ use ethrex_rlp::{
     encode::{RLPEncode, encode_length, list_length},
     structs,
 };
-use rustc_hash::FxHashMap;
+use rustc_hash::FxBuildHasher;
+type FxHashMap<K, V> = hashbrown::HashMap<K, V, FxBuildHasher>;
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, BTreeSet};
 
 use crate::constants::{EMPTY_BLOCK_ACCESS_LIST_HASH, SYSTEM_ADDRESS};
 use crate::utils::keccak;
@@ -216,7 +219,8 @@ impl RLPDecode for NonceChange {
     }
 }
 
-#[derive(Default, Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[derive(Default, Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "std", derive(Serialize, Deserialize))]
 pub struct CodeChange {
     /// Block access index per EIP-7928 spec (uint16).
     pub block_access_index: u16,
@@ -258,7 +262,8 @@ impl RLPDecode for CodeChange {
     }
 }
 
-#[derive(Default, Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[derive(Default, Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "std", derive(Serialize, Deserialize))]
 pub struct AccountChanges {
     pub address: Address,
     pub storage_changes: Vec<SlotChange>,
@@ -393,7 +398,8 @@ impl RLPDecode for AccountChanges {
     }
 }
 
-#[derive(Default, Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[derive(Default, Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "std", derive(Serialize, Deserialize))]
 pub struct BlockAccessList {
     inner: Vec<AccountChanges>,
 }
@@ -518,7 +524,7 @@ impl BlockAccessList {
     /// Use this when hashing a BAL constructed locally from execution.
     pub fn compute_hash(&self) -> H256 {
         if self.inner.is_empty() {
-            return *EMPTY_BLOCK_ACCESS_LIST_HASH;
+            return EMPTY_BLOCK_ACCESS_LIST_HASH;
         }
 
         let buf = self.encode_to_vec();

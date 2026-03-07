@@ -1,24 +1,30 @@
 pub mod levm;
 use levm::LEVM;
 
+use alloc::boxed::Box;
+use alloc::string::{String, ToString};
+use alloc::sync::Arc;
+use alloc::{format, vec, vec::Vec};
 use crate::db::{DynVmDatabase, VmDatabase};
 use crate::errors::EvmError;
 use crate::execution_result::ExecutionResult;
 use ethrex_common::types::block_access_list::BlockAccessList;
 use ethrex_common::types::requests::Requests;
 use ethrex_common::types::{
-    AccessList, AccountUpdate, Block, BlockHeader, Fork, GenericTransaction, Receipt, Transaction,
+    AccessList, AccountUpdate, Block, BlockHeader, Fork, Receipt, Transaction,
     Withdrawal,
 };
+#[cfg(feature = "std")]
+use ethrex_common::types::GenericTransaction;
 use ethrex_common::{Address, types::fee_config::FeeConfig};
 pub use ethrex_levm::call_frame::CallFrameBackup;
 use ethrex_levm::db::gen_db::GeneralizedDatabase;
 pub use ethrex_levm::db::{CachingDatabase, Database as LevmDatabase};
 use ethrex_levm::vm::VMType;
-use std::sync::Arc;
+#[cfg(feature = "std")]
 use std::sync::atomic::AtomicUsize;
+#[cfg(feature = "std")]
 use std::sync::mpsc::Sender;
-use tracing::instrument;
 
 #[derive(Clone)]
 pub struct Evm {
@@ -85,7 +91,8 @@ impl Evm {
         LEVM::execute_block(block, &mut self.db, self.vm_type)
     }
 
-    #[instrument(
+    #[cfg(feature = "std")]
+    #[tracing::instrument(
         level = "trace",
         name = "Block execution",
         skip_all,
@@ -198,6 +205,7 @@ impl Evm {
         self.db.set_bal_index(index);
     }
 
+    #[cfg(feature = "std")]
     pub fn simulate_tx_from_generic(
         &mut self,
         tx: &GenericTransaction,
@@ -206,6 +214,7 @@ impl Evm {
         LEVM::simulate_tx_from_generic(tx, header, &mut self.db, self.vm_type)
     }
 
+    #[cfg(feature = "std")]
     pub fn create_access_list(
         &mut self,
         tx: &GenericTransaction,

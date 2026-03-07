@@ -4,7 +4,8 @@ use crate::{
     vm::{VM, VMType},
 };
 use ethrex_common::types::fee_config::FeeConfig;
-use std::{cell::RefCell, rc::Rc};
+use alloc::{rc::Rc, vec, vec::Vec};
+use core::cell::RefCell;
 
 pub trait Hook {
     fn prepare_execution(&mut self, vm: &mut VM<'_>) -> Result<(), VMError>;

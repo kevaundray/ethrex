@@ -7,7 +7,7 @@ documentation.workspace = true
 license.workspace = true
 
 [dependencies]
-ethrex-common.workspace = true
+ethrex-common = { workspace = true, features = ["std"] }
 ethrex-rpc.workspace = true
 ethrex-l2-common.workspace = true
 ethrex-l2-rpc.workspace = true
@@ -18,12 +18,12 @@ tokio.workspace = true
 hex.workspace = true
 secp256k1.workspace = true
 itertools = "0.13.0"
-thiserror.workspace = true
+thiserror = { workspace = true, features = ["std"] }
 serde_json.workspace = true
-serde.workspace = true
+serde = { workspace = true, features = ["std"] }
 tracing.workspace = true
-ethrex-rlp.workspace = true
-bytes.workspace = true
+ethrex-rlp = { workspace = true, features = ["std"] }
+bytes = { workspace = true, features = ["serde"] }
 reqwest.workspace = true
 eyre.workspace = true
 lazy_static.workspace = true

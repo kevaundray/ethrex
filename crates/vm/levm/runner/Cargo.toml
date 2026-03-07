@@ -6,13 +6,13 @@ license = "MIT OR Apache-2.0"
 
 [dependencies]
 ethrex-levm = { path = "../" }
-ethrex-vm.workspace = true
-ethrex-common.workspace = true
+ethrex-vm = { workspace = true, features = ["std"] }
+ethrex-common = { workspace = true, features = ["std"] }
 ethrex-storage.workspace = true
 ethrex-blockchain.workspace = true
 hex.workspace = true
-bytes.workspace = true
-serde = { workspace = true, features = ["derive", "rc"] }
+bytes = { workspace = true, features = ["serde"] }
+serde = { workspace = true, features = ["derive", "rc", "std"] }
 serde_json.workspace = true
 json5 = "0.4.1"
 clap.workspace = true

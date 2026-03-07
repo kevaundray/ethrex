@@ -1,6 +1,10 @@
+use alloc::{string::String, vec::Vec};
 use bytes::{BufMut, Bytes};
 use ethereum_types::U256;
+#[cfg(feature = "std")]
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+#[cfg(not(feature = "std"))]
+use core::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
 use super::constants::RLP_NULL;
 

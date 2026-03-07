@@ -1,9 +1,13 @@
+use alloc::vec::Vec;
 use ethrex_common::types::{Block, block_execution_witness::ExecutionWitness};
+#[cfg(feature = "std")]
 use rkyv::{Archive, Deserialize as RDeserialize, Serialize as RSerialize};
+#[cfg(feature = "std")]
 use serde::{Deserialize, Serialize};
 
 /// Input for the L1 stateless validation program.
-#[derive(Default, Serialize, Deserialize, RDeserialize, RSerialize, Archive)]
+#[derive(Default)]
+#[cfg_attr(feature = "std", derive(Serialize, Deserialize, RDeserialize, RSerialize, Archive))]
 pub struct ProgramInput {
     /// Blocks to execute.
     pub blocks: Vec<Block>,

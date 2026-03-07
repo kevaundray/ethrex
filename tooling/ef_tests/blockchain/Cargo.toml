@@ -8,16 +8,16 @@ license.workspace = true
 
 [dependencies]
 ethrex-blockchain.workspace = true
-ethrex-common.workspace = true
+ethrex-common = { workspace = true, features = ["std"] }
 ethrex-storage.workspace = true
-ethrex-rlp.workspace = true
-ethrex-vm.workspace = true
+ethrex-rlp = { workspace = true, features = ["std"] }
+ethrex-vm = { workspace = true, features = ["std"] }
 ethrex-prover = { path = "../../../crates/l2/prover", default-features = false }
 ethrex-guest-program = { path = "../../../crates/guest-program", default-features = false }
 
-serde.workspace = true
+serde = { workspace = true, features = ["std"] }
 serde_json.workspace = true
-bytes.workspace = true
+bytes = { workspace = true, features = ["serde"] }
 hex.workspace = true
 lazy_static.workspace = true
 tokio = { workspace = true, features = ["full"] }

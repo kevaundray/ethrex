@@ -7,17 +7,17 @@ documentation.workspace = true
 license.workspace = true
 
 [dependencies]
-serde.workspace = true
-serde_with.workspace = true
-thiserror = "2.0.9"
-rkyv.workspace = true
-bytes.workspace = true
+serde = { workspace = true }
+serde_with = { workspace = true }
+thiserror = { workspace = true }
+rkyv = { workspace = true, optional = true }
+bytes = { workspace = true }
 
 ethrex-common = { path = "../common/", default-features = false }
 ethrex-crypto = { path = "../common/crypto", default-features = false }
 ethrex-vm = { path = "../vm", default-features = false }
 ethrex-rlp = { path = "../common/rlp", default-features = false }
-ethrex-l2-common = { path = "../l2/common", default-features = false }
+ethrex-l2-common = { path = "../l2/common", default-features = false, optional = true }
 
 [build-dependencies]
 hex.workspace = true
@@ -29,7 +29,18 @@ sp1-sdk = { version = "=5.0.8", optional = true }
 methods = ["bin/risc0"]
 
 [features]
-default = ["secp256k1"]
+default = ["std", "secp256k1"]
+std = [
+    "dep:rkyv",
+    "ethrex-common/std",
+    "ethrex-vm/std",
+    "ethrex-rlp/std",
+    "ethrex-crypto/std",
+    "bytes/serde",
+    "serde_with/std",
+    "serde/std",
+    "thiserror/std",
+]
 risc0 = ["dep:risc0-build"]
 sp1 = ["dep:sp1-build", "dep:sp1-sdk"]
 zisk = [
@@ -38,7 +49,7 @@ zisk = [
     "ethrex-l2-common/zisk",
 ]
 openvm = []
-l2 = []
+l2 = ["dep:ethrex-l2-common"]
 c-kzg = ["ethrex-vm/c-kzg", "ethrex-common/c-kzg"]
 secp256k1 = [
     "ethrex-common/secp256k1",

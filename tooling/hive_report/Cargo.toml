@@ -7,5 +7,5 @@ documentation.workspace = true
 license.workspace = true
 
 [dependencies]
-serde.workspace = true
+serde = { workspace = true, features = ["std"] }
 serde_json.workspace = true

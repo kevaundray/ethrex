@@ -3,7 +3,9 @@ use ethrex_common::constants::EMPTY_TRIE_HASH;
 use ethrex_common::types::{AccountState, GenesisAccount};
 use ethrex_common::utils::keccak;
 use ethrex_common::{U256, constants::EMPTY_KECCACK_HASH, types::AccountInfo};
-use rustc_hash::FxHashMap;
+use rustc_hash::FxBuildHasher;
+type FxHashMap<K, V> = hashbrown::HashMap<K, V, FxBuildHasher>;
+#[cfg(feature = "std")]
 use serde::{Deserialize, Serialize};
 
 /// Similar to `Account` struct but suited for LEVM implementation.
@@ -13,7 +15,8 @@ use serde::{Deserialize, Serialize};
 /// - We'll fetch the code only if we need to, this means less accesses to the database.
 /// - If there's duplicate code between accounts (which is pretty common) we'll store it in memory only once.
 /// - We'll be able to make better decisions without relying on external structures, based on the current status of an Account. e.g. If it was untouched we skip processing it when calculating Account Updates, or if the account has been destroyed and re-created with same address we know that the storage on the Database is not valid and we shouldn't access it, etc.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[cfg_attr(feature = "std", derive(Serialize, Deserialize))]
 pub struct LevmAccount {
     pub info: AccountInfo,
     pub storage: FxHashMap<H256, U256>,
@@ -68,7 +71,7 @@ impl From<AccountState> for LevmAccount {
             },
             storage: Default::default(),
             status: AccountStatus::Unmodified,
-            has_storage: state.storage_root != *EMPTY_TRIE_HASH,
+            has_storage: state.storage_root != EMPTY_TRIE_HASH,
         }
     }
 }
@@ -92,7 +95,7 @@ impl LevmAccount {
     }
 
     pub fn has_code(&self) -> bool {
-        self.info.code_hash != *EMPTY_KECCACK_HASH
+        self.info.code_hash != EMPTY_KECCACK_HASH
     }
 
     pub fn create_would_collide(&self) -> bool {
@@ -109,7 +112,8 @@ impl LevmAccount {
     }
 }
 
-#[derive(Clone, Default, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Default, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "std", derive(Serialize, Deserialize))]
 pub enum AccountStatus {
     #[default]
     /// Account was only read and not mutated at all.

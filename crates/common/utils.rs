@@ -1,3 +1,5 @@
+use alloc::vec::Vec;
+
 use crate::H256;
 use ethereum_types::U256;
 use ethrex_crypto::keccak::keccak_hash;

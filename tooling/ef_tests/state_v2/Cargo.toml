@@ -8,19 +8,19 @@ license.workspace = true
 
 [dependencies]
 ethrex-blockchain.workspace = true
-ethrex-common.workspace = true
+ethrex-common = { workspace = true, features = ["std"] }
 ethrex-storage.workspace = true
-ethrex-rlp.workspace = true
-ethrex-vm.workspace = true
-ethrex-levm.workspace = true
+ethrex-rlp = { workspace = true, features = ["std"] }
+ethrex-vm = { workspace = true, features = ["std"] }
+ethrex-levm = { workspace = true, features = ["std"] }
 ethrex-l2-rpc.workspace = true
 
 secp256k1.workspace = true
-serde.workspace = true
+serde = { workspace = true, features = ["std"] }
 serde_json.workspace = true
-bytes.workspace = true
+bytes = { workspace = true, features = ["serde"] }
 hex.workspace = true
-thiserror.workspace = true
+thiserror = { workspace = true, features = ["std"] }
 clap.workspace = true
 clap_complete.workspace = true
 tokio = { workspace = true, features = ["full"] }

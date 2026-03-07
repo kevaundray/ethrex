@@ -3,9 +3,13 @@ use ethrex_common::{
     Address, H256, U256,
     types::{AccountState, ChainConfig, Code, CodeMetadata},
 };
-use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
-use rustc_hash::FxHashMap;
-use std::sync::{Arc, OnceLock, PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard};
+use alloc::format;
+#[cfg(feature = "std")]
+use alloc::vec::Vec;
+use crate::sync_compat::{Arc, OnceLock, PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard};
+
+use rustc_hash::FxBuildHasher;
+type FxHashMap<K, V> = hashbrown::HashMap<K, V, FxBuildHasher>;
 
 pub mod gen_db;
 
@@ -183,7 +187,9 @@ impl Database for CachingDatabase {
         Some(&self.precompile_cache)
     }
 
+    #[cfg(feature = "std")]
     fn prefetch_accounts(&self, addresses: &[Address]) -> Result<(), DatabaseError> {
+        use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
         // Fetch from inner in parallel (no lock contention), then single write-lock to populate cache.
         let fetched: Vec<(Address, AccountState)> = addresses
             .par_iter()
@@ -196,7 +202,9 @@ impl Database for CachingDatabase {
         Ok(())
     }
 
+    #[cfg(feature = "std")]
     fn prefetch_storage(&self, keys: &[(Address, H256)]) -> Result<(), DatabaseError> {
+        use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
         // Fetch from inner in parallel (no lock contention), then single write-lock to populate cache.
         let fetched: Vec<((Address, H256), U256)> = keys
             .par_iter()

@@ -1,3 +1,5 @@
+use alloc::{string::{String, ToString}, vec::Vec};
+
 // TODO: Currently, we cannot include the types crate independently of common because the crates are not yet split.
 // After issue #4596 ("Split types crate from common") is resolved, update this to import the types crate directly,
 // so that crypto/kzg.rs does not depend on common for type definitions.
@@ -23,6 +25,7 @@ type Commitment = Bytes48;
 type Proof = Bytes48;
 
 /// Schedules the Ethereum trusted setup to load on a background thread so later KZG operations avoid the first-call cost.
+#[cfg(feature = "std")]
 pub fn warm_up_trusted_setup() {
     #[cfg(feature = "c-kzg")]
     {
@@ -93,10 +96,10 @@ pub fn verify_cell_kzg_proof_batch(
             &commitments
                 .iter()
                 .flat_map(|commitment| {
-                    std::iter::repeat_n((*commitment).into(), CELLS_PER_EXT_BLOB)
+                    core::iter::repeat_n((*commitment).into(), CELLS_PER_EXT_BLOB)
                 })
                 .collect::<Vec<_>>(),
-            &std::iter::repeat_n(0..CELLS_PER_EXT_BLOB as u64, blobs.len())
+            &core::iter::repeat_n(0..CELLS_PER_EXT_BLOB as u64, blobs.len())
                 .flatten()
                 .collect::<Vec<_>>(),
             &cells,

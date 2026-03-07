@@ -20,21 +20,27 @@ use ethrex_rlp::{
     error::RLPDecodeError,
     structs::{Decoder, Encoder},
 };
-use ethrex_trie::Trie;
-use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
-use rkyv::{Archive, Deserialize as RDeserialize, Serialize as RSerialize};
-use serde::{Deserialize, Serialize};
+use alloc::{vec, vec::Vec};
+use core::cmp::{Ordering, max};
 
-use std::cmp::{Ordering, max};
+use ethrex_trie::Trie;
+#[cfg(feature = "std")]
+use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
+#[cfg(feature = "std")]
+use rkyv::{Archive, Deserialize as RDeserialize, Serialize as RSerialize};
+#[cfg(feature = "std")]
+use serde::{Deserialize, Serialize};
 
 pub type BlockNumber = u64;
 pub type BlockHash = H256;
 
+#[cfg(feature = "std")]
 use once_cell::sync::OnceCell;
+#[cfg(not(feature = "std"))]
+use core::cell::OnceCell;
 
-#[derive(
-    PartialEq, Eq, Debug, Clone, Deserialize, Serialize, Default, RSerialize, RDeserialize, Archive,
-)]
+#[derive(PartialEq, Eq, Debug, Clone, Default)]
+#[cfg_attr(feature = "std", derive(Deserialize, Serialize, RSerialize, RDeserialize, Archive))]
 pub struct Block {
     pub header: BlockHeader,
     pub body: BlockBody,
@@ -80,77 +86,78 @@ impl RLPDecode for Block {
 }
 
 /// Header part of a block on the chain.
-#[derive(Clone, Debug, Serialize, Default, Deserialize, RSerialize, RDeserialize, Archive, Eq)]
-#[serde(rename_all = "camelCase")]
+#[derive(Clone, Debug, Default, Eq)]
+#[cfg_attr(feature = "std", derive(Serialize, Deserialize, RSerialize, RDeserialize, Archive))]
+#[cfg_attr(feature = "std", serde(rename_all = "camelCase"))]
 pub struct BlockHeader {
-    #[serde(skip)]
-    #[rkyv(with=rkyv::with::Skip)]
+    #[cfg_attr(feature = "std", serde(skip))]
+    #[cfg_attr(feature = "std", rkyv(with=rkyv::with::Skip))]
     pub hash: OnceCell<BlockHash>,
-    #[rkyv(with=crate::rkyv_utils::H256Wrapper)]
+    #[cfg_attr(feature = "std", rkyv(with=crate::rkyv_utils::H256Wrapper))]
     pub parent_hash: H256,
-    #[serde(rename = "sha3Uncles")]
-    #[rkyv(with=crate::rkyv_utils::H256Wrapper)]
+    #[cfg_attr(feature = "std", serde(rename = "sha3Uncles"))]
+    #[cfg_attr(feature = "std", rkyv(with=crate::rkyv_utils::H256Wrapper))]
     pub ommers_hash: H256, // ommer = uncle
-    #[rkyv(with=crate::rkyv_utils::H160Wrapper)]
-    #[serde(rename = "miner")]
+    #[cfg_attr(feature = "std", rkyv(with=crate::rkyv_utils::H160Wrapper))]
+    #[cfg_attr(feature = "std", serde(rename = "miner"))]
     pub coinbase: Address,
-    #[rkyv(with=crate::rkyv_utils::H256Wrapper)]
+    #[cfg_attr(feature = "std", rkyv(with=crate::rkyv_utils::H256Wrapper))]
     pub state_root: H256,
-    #[rkyv(with=crate::rkyv_utils::H256Wrapper)]
+    #[cfg_attr(feature = "std", rkyv(with=crate::rkyv_utils::H256Wrapper))]
     pub transactions_root: H256,
-    #[rkyv(with=crate::rkyv_utils::H256Wrapper)]
+    #[cfg_attr(feature = "std", rkyv(with=crate::rkyv_utils::H256Wrapper))]
     pub receipts_root: H256,
-    #[rkyv(with=crate::rkyv_utils::BloomWrapper)]
+    #[cfg_attr(feature = "std", rkyv(with=crate::rkyv_utils::BloomWrapper))]
     pub logs_bloom: Bloom,
-    #[serde(default)]
-    #[rkyv(with=crate::rkyv_utils::U256Wrapper)]
+    #[cfg_attr(feature = "std", serde(default))]
+    #[cfg_attr(feature = "std", rkyv(with=crate::rkyv_utils::U256Wrapper))]
     pub difficulty: U256,
-    #[serde(with = "crate::serde_utils::u64::hex_str")]
+    #[cfg_attr(feature = "std", serde(with = "crate::serde_utils::u64::hex_str"))]
     pub number: BlockNumber,
-    #[serde(with = "crate::serde_utils::u64::hex_str")]
+    #[cfg_attr(feature = "std", serde(with = "crate::serde_utils::u64::hex_str"))]
     pub gas_limit: u64,
-    #[serde(with = "crate::serde_utils::u64::hex_str")]
+    #[cfg_attr(feature = "std", serde(with = "crate::serde_utils::u64::hex_str"))]
     pub gas_used: u64,
-    #[serde(with = "crate::serde_utils::u64::hex_str")]
+    #[cfg_attr(feature = "std", serde(with = "crate::serde_utils::u64::hex_str"))]
     pub timestamp: u64,
-    #[serde(with = "crate::serde_utils::bytes")]
-    #[rkyv(with= crate::rkyv_utils::BytesWrapper)]
+    #[cfg_attr(feature = "std", serde(with = "crate::serde_utils::bytes"))]
+    #[cfg_attr(feature = "std", rkyv(with= crate::rkyv_utils::BytesWrapper))]
     pub extra_data: Bytes,
-    #[serde(rename = "mixHash")]
-    #[rkyv(with=crate::rkyv_utils::H256Wrapper)]
+    #[cfg_attr(feature = "std", serde(rename = "mixHash"))]
+    #[cfg_attr(feature = "std", rkyv(with=crate::rkyv_utils::H256Wrapper))]
     pub prev_randao: H256,
-    #[serde(with = "crate::serde_utils::u64::hex_str_padding")]
+    #[cfg_attr(feature = "std", serde(with = "crate::serde_utils::u64::hex_str_padding"))]
     pub nonce: u64,
-    #[serde(default, with = "crate::serde_utils::u64::hex_str_opt")]
+    #[cfg_attr(feature = "std", serde(default, with = "crate::serde_utils::u64::hex_str_opt"))]
     pub base_fee_per_gas: Option<u64>,
-    #[rkyv(with=crate::rkyv_utils::OptionH256Wrapper)]
+    #[cfg_attr(feature = "std", rkyv(with=crate::rkyv_utils::OptionH256Wrapper))]
     pub withdrawals_root: Option<H256>,
-    #[serde(
+    #[cfg_attr(feature = "std", serde(
         skip_serializing_if = "Option::is_none",
         with = "crate::serde_utils::u64::hex_str_opt",
         default = "Option::default"
-    )]
+    ))]
     pub blob_gas_used: Option<u64>,
-    #[serde(
+    #[cfg_attr(feature = "std", serde(
         skip_serializing_if = "Option::is_none",
         with = "crate::serde_utils::u64::hex_str_opt",
         default = "Option::default"
-    )]
+    ))]
     pub excess_blob_gas: Option<u64>,
-    #[rkyv(with=crate::rkyv_utils::OptionH256Wrapper)]
+    #[cfg_attr(feature = "std", rkyv(with=crate::rkyv_utils::OptionH256Wrapper))]
     pub parent_beacon_block_root: Option<H256>,
-    #[serde(skip_serializing_if = "Option::is_none", default = "Option::default")]
-    #[rkyv(with=crate::rkyv_utils::OptionH256Wrapper)]
+    #[cfg_attr(feature = "std", serde(skip_serializing_if = "Option::is_none", default = "Option::default"))]
+    #[cfg_attr(feature = "std", rkyv(with=crate::rkyv_utils::OptionH256Wrapper))]
     pub requests_hash: Option<H256>,
     // Amsterdam fork fields (EIP-7928)
-    #[serde(skip_serializing_if = "Option::is_none", default = "Option::default")]
-    #[rkyv(with=crate::rkyv_utils::OptionH256Wrapper)]
+    #[cfg_attr(feature = "std", serde(skip_serializing_if = "Option::is_none", default = "Option::default"))]
+    #[cfg_attr(feature = "std", rkyv(with=crate::rkyv_utils::OptionH256Wrapper))]
     pub block_access_list_hash: Option<H256>,
-    #[serde(
+    #[cfg_attr(feature = "std", serde(
         skip_serializing_if = "Option::is_none",
         with = "crate::serde_utils::u64::hex_str_opt",
         default = "Option::default"
-    )]
+    ))]
     pub slot_number: Option<u64>,
 }
 
@@ -301,13 +308,12 @@ impl RLPDecode for BlockHeader {
 }
 
 // The body of a block on the chain
-#[derive(
-    Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Default, RSerialize, RDeserialize, Archive,
-)]
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "std", derive(Serialize, Deserialize, RSerialize, RDeserialize, Archive))]
 pub struct BlockBody {
     pub transactions: Vec<Transaction>,
     // TODO: ommers list is always empty, so we can remove it
-    #[serde(rename = "uncles")]
+    #[cfg_attr(feature = "std", serde(rename = "uncles"))]
     pub ommers: Vec<BlockHeader>,
     pub withdrawals: Option<Vec<Withdrawal>>,
 }
@@ -324,10 +330,20 @@ impl BlockBody {
     pub fn get_transactions_with_sender(&self) -> Result<Vec<(&Transaction, Address)>, EcdsaError> {
         // Recovering addresses is computationally expensive.
         // Computing them in parallel greatly reduces execution time.
-        self.transactions
-            .par_iter()
-            .map(|tx| Ok((tx, tx.sender()?)))
-            .collect::<Result<Vec<(&Transaction, Address)>, EcdsaError>>()
+        #[cfg(feature = "std")]
+        {
+            self.transactions
+                .par_iter()
+                .map(|tx| Ok((tx, tx.sender()?)))
+                .collect::<Result<Vec<(&Transaction, Address)>, EcdsaError>>()
+        }
+        #[cfg(not(feature = "std"))]
+        {
+            self.transactions
+                .iter()
+                .map(|tx| Ok((tx, tx.sender()?)))
+                .collect::<Result<Vec<(&Transaction, Address)>, EcdsaError>>()
+        }
     }
 }
 
@@ -397,18 +413,17 @@ impl BlockHeader {
     }
 }
 
-#[derive(
-    Clone, Debug, PartialEq, Eq, Deserialize, Serialize, RSerialize, RDeserialize, Archive,
-)]
-#[serde(rename_all = "camelCase")]
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "std", derive(Deserialize, Serialize, RSerialize, RDeserialize, Archive))]
+#[cfg_attr(feature = "std", serde(rename_all = "camelCase"))]
 pub struct Withdrawal {
-    #[serde(with = "crate::serde_utils::u64::hex_str")]
+    #[cfg_attr(feature = "std", serde(with = "crate::serde_utils::u64::hex_str"))]
     pub index: u64,
-    #[serde(with = "crate::serde_utils::u64::hex_str")]
+    #[cfg_attr(feature = "std", serde(with = "crate::serde_utils::u64::hex_str"))]
     pub validator_index: u64,
-    #[rkyv(with=crate::rkyv_utils::H160Wrapper)]
+    #[cfg_attr(feature = "std", rkyv(with=crate::rkyv_utils::H160Wrapper))]
     pub address: Address,
-    #[serde(with = "crate::serde_utils::u64::hex_str")]
+    #[cfg_attr(feature = "std", serde(with = "crate::serde_utils::u64::hex_str"))]
     pub amount: u64,
 }
 
@@ -519,7 +534,8 @@ pub fn fake_exponential(
     }
 }
 
-#[derive(Debug, thiserror::Error, Serialize, Clone, PartialEq, Deserialize, Eq)]
+#[derive(Debug, thiserror::Error, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "std", derive(Serialize, Deserialize))]
 pub enum FakeExponentialError {
     #[error("FakeExponentialError: Denominator cannot be zero.")]
     DenominatorIsZero,
@@ -680,7 +696,7 @@ pub fn validate_block_header(
         return Err(InvalidBlockHeaderError::NonceNotZero);
     }
 
-    if header.ommers_hash != *DEFAULT_OMMERS_HASH {
+    if header.ommers_hash != DEFAULT_OMMERS_HASH {
         return Err(InvalidBlockHeaderError::OmmersHashNotDefault);
     }
 
@@ -717,7 +733,7 @@ pub fn validate_block_body(
             }
         }
         (Some(withdrawals_root), None) => {
-            if withdrawals_root != *EMPTY_WITHDRAWALS_HASH {
+            if withdrawals_root != EMPTY_WITHDRAWALS_HASH {
                 return Err(InvalidBlockBodyError::WithdrawalsRootNotMatch);
             }
         }
@@ -919,7 +935,7 @@ mod test {
             blob_gas_used: Some(0x00),
             excess_blob_gas: Some(0x00),
             parent_beacon_block_root: Some(H256::zero()),
-            requests_hash: Some(*EMPTY_KECCACK_HASH),
+            requests_hash: Some(EMPTY_KECCACK_HASH),
             ..Default::default()
         };
         let block = BlockHeader {
@@ -963,7 +979,7 @@ mod test {
             blob_gas_used: Some(0x00),
             excess_blob_gas: Some(0x00),
             parent_beacon_block_root: Some(H256::zero()),
-            requests_hash: Some(*EMPTY_KECCACK_HASH),
+            requests_hash: Some(EMPTY_KECCACK_HASH),
             ..Default::default()
         };
         assert!(validate_block_header(&block, &parent_block, ELASTICITY_MULTIPLIER).is_ok());

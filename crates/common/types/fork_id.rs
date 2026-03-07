@@ -1,4 +1,5 @@
-use std::fmt;
+use alloc::{vec, vec::Vec};
+use core::fmt;
 
 use crc32fast::Hasher;
 use ethrex_rlp::{
@@ -9,6 +10,7 @@ use ethrex_rlp::{
 };
 
 use ethereum_types::H32;
+#[cfg(feature = "std")]
 use tracing::debug;
 
 use super::{BlockHash, BlockHeader, BlockNumber, ChainConfig};
@@ -87,6 +89,7 @@ impl ForkId {
         if remote.fork_hash == self.fork_hash {
             // validation rule #1
             if remote.fork_next <= head && remote.fork_next != 0 {
+                #[cfg(feature = "std")]
                 debug!("Future fork already passed locally.");
                 return false;
             }
@@ -117,6 +120,7 @@ impl ForkId {
             }
         }
         // rule #4
+        #[cfg(feature = "std")]
         debug!("Local or remote needs software update.");
         false
     }

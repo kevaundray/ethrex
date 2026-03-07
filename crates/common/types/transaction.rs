@@ -1,12 +1,18 @@
-use std::{cmp::min, fmt::Display};
+use alloc::{format, string::String, string::ToString, vec, vec::Vec};
+use core::cmp::min;
+use core::fmt::Display;
 
 use crate::{errors::EcdsaError, utils::keccak};
 use bytes::Bytes;
 use ethereum_types::{Address, H256, Signature, U256};
 use hex_literal::hex;
+#[cfg(feature = "std")]
 pub use mempool::MempoolTransaction;
+#[cfg(feature = "std")]
 use rkyv::{Archive, Deserialize as RDeserialize, Serialize as RSerialize};
+#[cfg(feature = "std")]
 use serde::{Serialize, ser::SerializeStruct};
+#[cfg(feature = "std")]
 pub use serde_impl::{
     AccessListEntry, AuthorizationTupleEntry, GenericTransaction, GenericTransactionError,
 };
@@ -23,7 +29,10 @@ use ethrex_rlp::{
 };
 
 use crate::types::{AccessList, AuthorizationList, BlobsBundle};
+#[cfg(feature = "std")]
 use once_cell::sync::OnceCell;
+#[cfg(not(feature = "std"))]
+use core::cell::OnceCell;
 
 // The `#[serde(untagged)]` attribute allows the `Transaction` enum to be serialized without
 // a tag indicating the variant type. This means that Serde will serialize the enum's variants
@@ -33,8 +42,9 @@ use once_cell::sync::OnceCell;
 // The serialization will fail if the data does not match the structure of any variant.
 //
 // A custom Deserialization method is implemented to match the specific transaction `type`.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, RSerialize, RDeserialize, Archive)]
-#[serde(untagged)]
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "std", derive(Serialize, RSerialize, RDeserialize, Archive))]
+#[cfg_attr(feature = "std", serde(untagged))]
 pub enum Transaction {
     LegacyTransaction(LegacyTransaction),
     EIP2930Transaction(EIP2930Transaction),
@@ -175,59 +185,62 @@ impl RLPDecode for WrappedEIP4844Transaction {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Default, RSerialize, RDeserialize, Archive)]
+#[derive(Clone, Debug, PartialEq, Eq, Default, )]
+#[cfg_attr(feature = "std", derive(RSerialize, RDeserialize, Archive))]
 pub struct LegacyTransaction {
     pub nonce: u64,
-    #[rkyv(with=crate::rkyv_utils::U256Wrapper)]
+    #[cfg_attr(feature = "std", rkyv(with=crate::rkyv_utils::U256Wrapper))]
     pub gas_price: U256,
     pub gas: u64,
     /// The recipient of the transaction.
     /// Create transactions contain a [`null`](RLP_NULL) value in this field.
     pub to: TxKind,
-    #[rkyv(with=crate::rkyv_utils::U256Wrapper)]
+    #[cfg_attr(feature = "std", rkyv(with=crate::rkyv_utils::U256Wrapper))]
     pub value: U256,
-    #[rkyv(with=crate::rkyv_utils::BytesWrapper)]
+    #[cfg_attr(feature = "std", rkyv(with=crate::rkyv_utils::BytesWrapper))]
     pub data: Bytes,
-    #[rkyv(with=crate::rkyv_utils::U256Wrapper)]
+    #[cfg_attr(feature = "std", rkyv(with=crate::rkyv_utils::U256Wrapper))]
     pub v: U256,
-    #[rkyv(with=crate::rkyv_utils::U256Wrapper)]
+    #[cfg_attr(feature = "std", rkyv(with=crate::rkyv_utils::U256Wrapper))]
     pub r: U256,
-    #[rkyv(with=crate::rkyv_utils::U256Wrapper)]
+    #[cfg_attr(feature = "std", rkyv(with=crate::rkyv_utils::U256Wrapper))]
     pub s: U256,
-    #[rkyv(with=rkyv::with::Skip)]
+    #[cfg_attr(feature = "std", rkyv(with=rkyv::with::Skip))]
     pub inner_hash: OnceCell<H256>,
-    #[rkyv(with=rkyv::with::Skip)]
+    #[cfg_attr(feature = "std", rkyv(with=rkyv::with::Skip))]
     pub sender_cache: OnceCell<Address>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Default, RSerialize, RDeserialize, Archive)]
+#[derive(Clone, Debug, PartialEq, Eq, Default, )]
+#[cfg_attr(feature = "std", derive(RSerialize, RDeserialize, Archive))]
 pub struct EIP2930Transaction {
     pub chain_id: u64,
     pub nonce: u64,
-    #[rkyv(with=crate::rkyv_utils::U256Wrapper)]
+    #[cfg_attr(feature = "std", rkyv(with=crate::rkyv_utils::U256Wrapper))]
     pub gas_price: U256,
     pub gas_limit: u64,
     pub to: TxKind,
-    #[rkyv(with=crate::rkyv_utils::U256Wrapper)]
+    #[cfg_attr(feature = "std", rkyv(with=crate::rkyv_utils::U256Wrapper))]
     pub value: U256,
-    #[rkyv(with=crate::rkyv_utils::BytesWrapper)]
+    #[cfg_attr(feature = "std", rkyv(with=crate::rkyv_utils::BytesWrapper))]
     pub data: Bytes,
-    #[rkyv(with=rkyv::with::Map<crate::rkyv_utils::AccessListItemWrapper>)]
+    #[cfg_attr(feature = "std", rkyv(with=rkyv::with::Map<crate::rkyv_utils::AccessListItemWrapper>))]
     pub access_list: AccessList,
     pub signature_y_parity: bool,
-    #[rkyv(with=crate::rkyv_utils::U256Wrapper)]
+    #[cfg_attr(feature = "std", rkyv(with=crate::rkyv_utils::U256Wrapper))]
     pub signature_r: U256,
-    #[rkyv(with=crate::rkyv_utils::U256Wrapper)]
+    #[cfg_attr(feature = "std", rkyv(with=crate::rkyv_utils::U256Wrapper))]
     pub signature_s: U256,
-    #[rkyv(with=rkyv::with::Skip)]
+    #[cfg_attr(feature = "std", rkyv(with=rkyv::with::Skip))]
     pub inner_hash: OnceCell<H256>,
-    #[rkyv(with=rkyv::with::Skip)]
+    #[cfg_attr(feature = "std", rkyv(with=rkyv::with::Skip))]
     pub sender_cache: OnceCell<Address>,
-    #[rkyv(with=rkyv::with::Skip)]
+    #[cfg_attr(feature = "std", rkyv(with=rkyv::with::Skip))]
     pub cached_canonical: OnceCell<Vec<u8>>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Default, RSerialize, RDeserialize, Archive)]
+#[derive(Clone, Debug, PartialEq, Eq, Default, )]
+#[cfg_attr(feature = "std", derive(RSerialize, RDeserialize, Archive))]
 pub struct EIP1559Transaction {
     pub chain_id: u64,
     pub nonce: u64,
@@ -235,86 +248,89 @@ pub struct EIP1559Transaction {
     pub max_fee_per_gas: u64,
     pub gas_limit: u64,
     pub to: TxKind,
-    #[rkyv(with=crate::rkyv_utils::U256Wrapper)]
+    #[cfg_attr(feature = "std", rkyv(with=crate::rkyv_utils::U256Wrapper))]
     pub value: U256,
-    #[rkyv(with=crate::rkyv_utils::BytesWrapper)]
+    #[cfg_attr(feature = "std", rkyv(with=crate::rkyv_utils::BytesWrapper))]
     pub data: Bytes,
-    #[rkyv(with=rkyv::with::Map<crate::rkyv_utils::AccessListItemWrapper>)]
+    #[cfg_attr(feature = "std", rkyv(with=rkyv::with::Map<crate::rkyv_utils::AccessListItemWrapper>))]
     pub access_list: AccessList,
     pub signature_y_parity: bool,
-    #[rkyv(with=crate::rkyv_utils::U256Wrapper)]
+    #[cfg_attr(feature = "std", rkyv(with=crate::rkyv_utils::U256Wrapper))]
     pub signature_r: U256,
-    #[rkyv(with=crate::rkyv_utils::U256Wrapper)]
+    #[cfg_attr(feature = "std", rkyv(with=crate::rkyv_utils::U256Wrapper))]
     pub signature_s: U256,
-    #[rkyv(with=rkyv::with::Skip)]
+    #[cfg_attr(feature = "std", rkyv(with=rkyv::with::Skip))]
     pub inner_hash: OnceCell<H256>,
-    #[rkyv(with=rkyv::with::Skip)]
+    #[cfg_attr(feature = "std", rkyv(with=rkyv::with::Skip))]
     pub sender_cache: OnceCell<Address>,
-    #[rkyv(with=rkyv::with::Skip)]
+    #[cfg_attr(feature = "std", rkyv(with=rkyv::with::Skip))]
     pub cached_canonical: OnceCell<Vec<u8>>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Default, RSerialize, RDeserialize, Archive)]
+#[derive(Clone, Debug, PartialEq, Eq, Default, )]
+#[cfg_attr(feature = "std", derive(RSerialize, RDeserialize, Archive))]
 pub struct EIP4844Transaction {
     pub chain_id: u64,
     pub nonce: u64,
     pub max_priority_fee_per_gas: u64,
     pub max_fee_per_gas: u64,
     pub gas: u64,
-    #[rkyv(with=crate::rkyv_utils::H160Wrapper)]
+    #[cfg_attr(feature = "std", rkyv(with=crate::rkyv_utils::H160Wrapper))]
     pub to: Address,
-    #[rkyv(with=crate::rkyv_utils::U256Wrapper)]
+    #[cfg_attr(feature = "std", rkyv(with=crate::rkyv_utils::U256Wrapper))]
     pub value: U256,
-    #[rkyv(with=crate::rkyv_utils::BytesWrapper)]
+    #[cfg_attr(feature = "std", rkyv(with=crate::rkyv_utils::BytesWrapper))]
     pub data: Bytes,
-    #[rkyv(with=rkyv::with::Map<crate::rkyv_utils::AccessListItemWrapper>)]
+    #[cfg_attr(feature = "std", rkyv(with=rkyv::with::Map<crate::rkyv_utils::AccessListItemWrapper>))]
     pub access_list: AccessList,
-    #[rkyv(with=crate::rkyv_utils::U256Wrapper)]
+    #[cfg_attr(feature = "std", rkyv(with=crate::rkyv_utils::U256Wrapper))]
     pub max_fee_per_blob_gas: U256,
-    #[rkyv(with=rkyv::with::Map<crate::rkyv_utils::H256Wrapper>)]
+    #[cfg_attr(feature = "std", rkyv(with=rkyv::with::Map<crate::rkyv_utils::H256Wrapper>))]
     pub blob_versioned_hashes: Vec<H256>,
     pub signature_y_parity: bool,
-    #[rkyv(with=crate::rkyv_utils::U256Wrapper)]
+    #[cfg_attr(feature = "std", rkyv(with=crate::rkyv_utils::U256Wrapper))]
     pub signature_r: U256,
-    #[rkyv(with=crate::rkyv_utils::U256Wrapper)]
+    #[cfg_attr(feature = "std", rkyv(with=crate::rkyv_utils::U256Wrapper))]
     pub signature_s: U256,
-    #[rkyv(with=rkyv::with::Skip)]
+    #[cfg_attr(feature = "std", rkyv(with=rkyv::with::Skip))]
     pub inner_hash: OnceCell<H256>,
-    #[rkyv(with=rkyv::with::Skip)]
+    #[cfg_attr(feature = "std", rkyv(with=rkyv::with::Skip))]
     pub sender_cache: OnceCell<Address>,
-    #[rkyv(with=rkyv::with::Skip)]
+    #[cfg_attr(feature = "std", rkyv(with=rkyv::with::Skip))]
     pub cached_canonical: OnceCell<Vec<u8>>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Default, RSerialize, RDeserialize, Archive)]
+#[derive(Clone, Debug, PartialEq, Eq, Default, )]
+#[cfg_attr(feature = "std", derive(RSerialize, RDeserialize, Archive))]
 pub struct EIP7702Transaction {
     pub chain_id: u64,
     pub nonce: u64,
     pub max_priority_fee_per_gas: u64,
     pub max_fee_per_gas: u64,
     pub gas_limit: u64,
-    #[rkyv(with=crate::rkyv_utils::H160Wrapper)]
+    #[cfg_attr(feature = "std", rkyv(with=crate::rkyv_utils::H160Wrapper))]
     pub to: Address,
-    #[rkyv(with=crate::rkyv_utils::U256Wrapper)]
+    #[cfg_attr(feature = "std", rkyv(with=crate::rkyv_utils::U256Wrapper))]
     pub value: U256,
-    #[rkyv(with=crate::rkyv_utils::BytesWrapper)]
+    #[cfg_attr(feature = "std", rkyv(with=crate::rkyv_utils::BytesWrapper))]
     pub data: Bytes,
-    #[rkyv(with=rkyv::with::Map<crate::rkyv_utils::AccessListItemWrapper>)]
+    #[cfg_attr(feature = "std", rkyv(with=rkyv::with::Map<crate::rkyv_utils::AccessListItemWrapper>))]
     pub access_list: AccessList,
     pub authorization_list: AuthorizationList,
     pub signature_y_parity: bool,
-    #[rkyv(with=crate::rkyv_utils::U256Wrapper)]
+    #[cfg_attr(feature = "std", rkyv(with=crate::rkyv_utils::U256Wrapper))]
     pub signature_r: U256,
-    #[rkyv(with=crate::rkyv_utils::U256Wrapper)]
+    #[cfg_attr(feature = "std", rkyv(with=crate::rkyv_utils::U256Wrapper))]
     pub signature_s: U256,
-    #[rkyv(with=rkyv::with::Skip)]
+    #[cfg_attr(feature = "std", rkyv(with=rkyv::with::Skip))]
     pub inner_hash: OnceCell<H256>,
-    #[rkyv(with=rkyv::with::Skip)]
+    #[cfg_attr(feature = "std", rkyv(with=rkyv::with::Skip))]
     pub sender_cache: OnceCell<Address>,
-    #[rkyv(with=rkyv::with::Skip)]
+    #[cfg_attr(feature = "std", rkyv(with=rkyv::with::Skip))]
     pub cached_canonical: OnceCell<Vec<u8>>,
 }
-#[derive(Clone, Debug, PartialEq, Eq, Default, RSerialize, RDeserialize, Archive)]
+#[derive(Clone, Debug, PartialEq, Eq, Default, )]
+#[cfg_attr(feature = "std", derive(RSerialize, RDeserialize, Archive))]
 pub struct PrivilegedL2Transaction {
     pub chain_id: u64,
     pub nonce: u64,
@@ -322,19 +338,19 @@ pub struct PrivilegedL2Transaction {
     pub max_fee_per_gas: u64,
     pub gas_limit: u64,
     pub to: TxKind,
-    #[rkyv(with=crate::rkyv_utils::U256Wrapper)]
+    #[cfg_attr(feature = "std", rkyv(with=crate::rkyv_utils::U256Wrapper))]
     pub value: U256,
-    #[rkyv(with=crate::rkyv_utils::BytesWrapper)]
+    #[cfg_attr(feature = "std", rkyv(with=crate::rkyv_utils::BytesWrapper))]
     pub data: Bytes,
-    #[rkyv(with=rkyv::with::Map<crate::rkyv_utils::AccessListItemWrapper>)]
+    #[cfg_attr(feature = "std", rkyv(with=rkyv::with::Map<crate::rkyv_utils::AccessListItemWrapper>))]
     pub access_list: AccessList,
-    #[rkyv(with=crate::rkyv_utils::H160Wrapper)]
+    #[cfg_attr(feature = "std", rkyv(with=crate::rkyv_utils::H160Wrapper))]
     pub from: Address,
-    #[rkyv(with=rkyv::with::Skip)]
+    #[cfg_attr(feature = "std", rkyv(with=rkyv::with::Skip))]
     pub inner_hash: OnceCell<H256>,
-    #[rkyv(with=rkyv::with::Skip)]
+    #[cfg_attr(feature = "std", rkyv(with=rkyv::with::Skip))]
     pub sender_cache: OnceCell<Address>,
-    #[rkyv(with=rkyv::with::Skip)]
+    #[cfg_attr(feature = "std", rkyv(with=rkyv::with::Skip))]
     pub cached_canonical: OnceCell<Vec<u8>>,
 }
 
@@ -367,7 +383,7 @@ impl From<TxType> for u8 {
 }
 
 impl Display for TxType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             TxType::Legacy => write!(f, "Legacy"),
             TxType::EIP2930 => write!(f, "EIP2930"),
@@ -519,9 +535,10 @@ impl RLPDecode for Transaction {
 }
 
 /// The transaction's kind: call or create.
-#[derive(Clone, Debug, PartialEq, Eq, Default, RSerialize, RDeserialize, Archive)]
+#[derive(Clone, Debug, PartialEq, Eq, Default, )]
+#[cfg_attr(feature = "std", derive(RSerialize, RDeserialize, Archive))]
 pub enum TxKind {
-    Call(#[rkyv(with=crate::rkyv_utils::H160Wrapper)] Address),
+    Call(#[cfg_attr(feature = "std", rkyv(with=crate::rkyv_utils::H160Wrapper))] Address),
     #[default]
     Create,
 }
@@ -1093,9 +1110,22 @@ impl Transaction {
             Transaction::PrivilegedL2Transaction(tx) => &tx.sender_cache,
             Transaction::FeeTokenTransaction(tx) => &tx.sender_cache,
         };
-        sender_cache
-            .get_or_try_init(|| self.compute_sender())
-            .copied()
+        #[cfg(feature = "std")]
+        {
+            sender_cache
+                .get_or_try_init(|| self.compute_sender())
+                .copied()
+        }
+        #[cfg(not(feature = "std"))]
+        {
+            if let Some(sender) = sender_cache.get() {
+                Ok(*sender)
+            } else {
+                let sender = self.compute_sender()?;
+                let _ = sender_cache.set(sender);
+                Ok(sender)
+            }
+        }
     }
 
     fn compute_sender(&self) -> Result<Address, EcdsaError> {
@@ -1521,14 +1551,14 @@ pub fn recover_address(signature: Signature, payload: H256) -> Result<Address, k
     // 2. Sometimes it can happen that the zkVM patch can have a different behavior than the original crate (shouldn't happen, but has happened). So we put this just in case.
     // 3. Fail fast
     if signature_has_high_s(&signature_bytes) {
-        return Err(k256::ecdsa::Error::from_source("High-s signature"));
+        return Err(k256::ecdsa::Error::new());
     }
 
     let signature = k256::ecdsa::Signature::from_slice(&signature_bytes[..64])?;
 
     let recovery_id_byte = signature_bytes[64];
     let recovery_id = k256::ecdsa::RecoveryId::from_byte(recovery_id_byte).ok_or(
-        k256::ecdsa::Error::from_source("Failed to parse recovery id"),
+        k256::ecdsa::Error::new(),
     )?;
 
     // Recover public key
@@ -1606,7 +1636,8 @@ impl PrivilegedL2Transaction {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Default, RSerialize, RDeserialize, Archive)]
+#[derive(Clone, Debug, PartialEq, Eq, Default, )]
+#[cfg_attr(feature = "std", derive(RSerialize, RDeserialize, Archive))]
 pub struct FeeTokenTransaction {
     pub chain_id: u64,
     pub nonce: u64,
@@ -1614,24 +1645,24 @@ pub struct FeeTokenTransaction {
     pub max_fee_per_gas: u64,
     pub gas_limit: u64,
     pub to: TxKind,
-    #[rkyv(with=crate::rkyv_utils::U256Wrapper)]
+    #[cfg_attr(feature = "std", rkyv(with=crate::rkyv_utils::U256Wrapper))]
     pub value: U256,
-    #[rkyv(with=crate::rkyv_utils::BytesWrapper)]
+    #[cfg_attr(feature = "std", rkyv(with=crate::rkyv_utils::BytesWrapper))]
     pub data: Bytes,
-    #[rkyv(with=rkyv::with::Map<crate::rkyv_utils::AccessListItemWrapper>)]
+    #[cfg_attr(feature = "std", rkyv(with=rkyv::with::Map<crate::rkyv_utils::AccessListItemWrapper>))]
     pub access_list: AccessList,
-    #[rkyv(with=crate::rkyv_utils::H160Wrapper)]
+    #[cfg_attr(feature = "std", rkyv(with=crate::rkyv_utils::H160Wrapper))]
     pub fee_token: Address,
     pub signature_y_parity: bool,
-    #[rkyv(with=crate::rkyv_utils::U256Wrapper)]
+    #[cfg_attr(feature = "std", rkyv(with=crate::rkyv_utils::U256Wrapper))]
     pub signature_r: U256,
-    #[rkyv(with=crate::rkyv_utils::U256Wrapper)]
+    #[cfg_attr(feature = "std", rkyv(with=crate::rkyv_utils::U256Wrapper))]
     pub signature_s: U256,
-    #[rkyv(with=rkyv::with::Skip)]
+    #[cfg_attr(feature = "std", rkyv(with=rkyv::with::Skip))]
     pub inner_hash: OnceCell<H256>,
-    #[rkyv(with=rkyv::with::Skip)]
+    #[cfg_attr(feature = "std", rkyv(with=rkyv::with::Skip))]
     pub sender_cache: OnceCell<Address>,
-    #[rkyv(with=rkyv::with::Skip)]
+    #[cfg_attr(feature = "std", rkyv(with=rkyv::with::Skip))]
     pub cached_canonical: OnceCell<Vec<u8>>,
 }
 
@@ -1794,6 +1825,7 @@ mod canonic_encoding {
 // Serialization
 // This is used for RPC messaging and passing data into a RISC-V zkVM
 
+#[cfg(feature = "std")]
 mod serde_impl {
     use ethereum_types::H160;
     use serde::Deserialize;
@@ -3012,6 +3044,7 @@ mod serde_impl {
     }
 }
 
+#[cfg(feature = "std")]
 mod mempool {
     use super::*;
     use std::{

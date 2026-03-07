@@ -26,7 +26,9 @@ use crate::{
 };
 use bytes::Bytes;
 use ethrex_common::{Address, H256, U256, evm::calculate_create_address, types::Fork};
-use ethrex_common::{tracing::CallType, types::Code};
+use alloc::string::{String, ToString};
+use crate::tracing::CallType;
+use ethrex_common::types::Code;
 
 pub struct OpCallHandler;
 impl OpcodeHandler for OpCallHandler {

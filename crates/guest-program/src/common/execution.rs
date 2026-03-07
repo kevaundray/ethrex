@@ -1,3 +1,5 @@
+use alloc::string::ToString;
+use alloc::vec::Vec;
 use ethrex_common::types::block_execution_witness::{ExecutionWitness, GuestProgramState};
 use ethrex_common::types::{Block, Receipt, validate_block_body};
 use ethrex_common::{

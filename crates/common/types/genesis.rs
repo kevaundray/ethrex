@@ -1,29 +1,36 @@
+use alloc::{vec, vec::Vec};
+use alloc::collections::BTreeMap;
+
 use bytes::Bytes;
 use ethereum_types::{Address, Bloom, H256, U256};
 use ethrex_crypto::keccak::keccak_hash;
 use ethrex_rlp::encode::RLPEncode;
 use ethrex_trie::Trie;
+#[cfg(feature = "std")]
 use rkyv::{Archive, Deserialize as RDeserialize, Serialize as RSerialize};
+#[cfg(feature = "std")]
 use serde::{Deserialize, Serialize};
+#[cfg(feature = "std")]
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::HashMap,
     io::{BufReader, Error},
     path::Path,
 };
+#[cfg(feature = "std")]
 use tracing::warn;
 
 use super::{
     AccountState, Block, BlockBody, BlockHeader, BlockNumber, INITIAL_BASE_FEE,
     compute_receipts_root, compute_transactions_root, compute_withdrawals_root,
 };
-use crate::{
-    constants::{DEFAULT_OMMERS_HASH, DEFAULT_REQUESTS_HASH, EMPTY_BLOCK_ACCESS_LIST_HASH},
-    rkyv_utils,
-};
+use crate::constants::{DEFAULT_OMMERS_HASH, DEFAULT_REQUESTS_HASH, EMPTY_BLOCK_ACCESS_LIST_HASH};
+#[cfg(feature = "std")]
+use crate::rkyv_utils;
 
 #[allow(unused)]
-#[derive(Debug, Deserialize, Serialize, Clone, Default)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, Default)]
+#[cfg_attr(feature = "std", derive(Deserialize, Serialize))]
+#[cfg_attr(feature = "std", serde(rename_all = "camelCase"))]
 pub struct Genesis {
     /// Chain configuration
     pub config: ChainConfig,
@@ -33,30 +40,31 @@ pub struct Genesis {
     /// Genesis header values
     pub coinbase: Address,
     pub difficulty: U256,
-    #[serde(default, with = "crate::serde_utils::bytes")]
+    #[cfg_attr(feature = "std", serde(default, with = "crate::serde_utils::bytes"))]
     pub extra_data: Bytes,
-    #[serde(with = "crate::serde_utils::u64::hex_str")]
+    #[cfg_attr(feature = "std", serde(with = "crate::serde_utils::u64::hex_str"))]
     pub gas_limit: u64,
-    #[serde(with = "crate::serde_utils::u64::hex_str")]
+    #[cfg_attr(feature = "std", serde(with = "crate::serde_utils::u64::hex_str"))]
     pub nonce: u64,
-    #[serde(alias = "mixHash", alias = "mixhash")]
+    #[cfg_attr(feature = "std", serde(alias = "mixHash", alias = "mixhash"))]
     pub mix_hash: H256,
-    #[serde(deserialize_with = "crate::serde_utils::u64::deser_hex_or_dec_str")]
-    #[serde(serialize_with = "crate::serde_utils::u256::serialize_number")]
+    #[cfg_attr(feature = "std", serde(deserialize_with = "crate::serde_utils::u64::deser_hex_or_dec_str"))]
+    #[cfg_attr(feature = "std", serde(serialize_with = "crate::serde_utils::u256::serialize_number"))]
     pub timestamp: u64,
-    #[serde(default, with = "crate::serde_utils::u64::hex_str_opt")]
+    #[cfg_attr(feature = "std", serde(default, with = "crate::serde_utils::u64::hex_str_opt"))]
     pub base_fee_per_gas: Option<u64>,
-    #[serde(default, with = "crate::serde_utils::u64::hex_str_opt")]
+    #[cfg_attr(feature = "std", serde(default, with = "crate::serde_utils::u64::hex_str_opt"))]
     pub blob_gas_used: Option<u64>,
-    #[serde(default, with = "crate::serde_utils::u64::hex_str_opt")]
+    #[cfg_attr(feature = "std", serde(default, with = "crate::serde_utils::u64::hex_str_opt"))]
     pub excess_blob_gas: Option<u64>,
     pub requests_hash: Option<H256>,
     // Amsterdam fork fields (EIP-7928)
     pub block_access_list_hash: Option<H256>,
-    #[serde(default, with = "crate::serde_utils::u64::hex_str_opt")]
+    #[cfg_attr(feature = "std", serde(default, with = "crate::serde_utils::u64::hex_str_opt"))]
     pub slot_number: Option<u64>,
 }
 
+#[cfg(feature = "std")]
 #[derive(Debug, thiserror::Error)]
 pub enum GenesisError {
     #[error("Failed to decode genesis file: {0}")]
@@ -67,6 +75,7 @@ pub enum GenesisError {
     File(#[from] Error),
 }
 
+#[cfg(feature = "std")]
 impl TryFrom<&Path> for Genesis {
     type Error = GenesisError;
 
@@ -101,19 +110,9 @@ impl TryFrom<&Path> for Genesis {
 }
 
 #[allow(unused)]
-#[derive(
-    Clone,
-    Copy,
-    Debug,
-    Serialize,
-    Deserialize,
-    PartialEq,
-    RSerialize,
-    RDeserialize,
-    Archive,
-    Default,
-)]
-#[serde(rename_all = "camelCase")]
+#[derive(Clone, Copy, Debug, PartialEq, Default)]
+#[cfg_attr(feature = "std", derive(Serialize, Deserialize, RSerialize, RDeserialize, Archive))]
+#[cfg_attr(feature = "std", serde(rename_all = "camelCase"))]
 pub struct ForkBlobSchedule {
     pub base_fee_update_fraction: u64,
     pub max: u32,
@@ -121,28 +120,27 @@ pub struct ForkBlobSchedule {
 }
 
 #[allow(unused)]
-#[derive(
-    Clone, Copy, Debug, Serialize, Deserialize, PartialEq, RSerialize, RDeserialize, Archive,
-)]
-#[serde(rename_all = "camelCase")]
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[cfg_attr(feature = "std", derive(Serialize, Deserialize, RSerialize, RDeserialize, Archive))]
+#[cfg_attr(feature = "std", serde(rename_all = "camelCase"))]
 pub struct BlobSchedule {
-    #[serde(default = "default_cancun_schedule")]
+    #[cfg_attr(feature = "std", serde(default = "default_cancun_schedule"))]
     pub cancun: ForkBlobSchedule,
-    #[serde(default = "default_prague_schedule")]
+    #[cfg_attr(feature = "std", serde(default = "default_prague_schedule"))]
     pub prague: ForkBlobSchedule,
-    #[serde(default = "default_osaka_schedule")]
+    #[cfg_attr(feature = "std", serde(default = "default_osaka_schedule"))]
     pub osaka: ForkBlobSchedule,
-    #[serde(default = "default_bpo1_schedule")]
+    #[cfg_attr(feature = "std", serde(default = "default_bpo1_schedule"))]
     pub bpo1: ForkBlobSchedule,
-    #[serde(default = "default_bpo2_schedule")]
+    #[cfg_attr(feature = "std", serde(default = "default_bpo2_schedule"))]
     pub bpo2: ForkBlobSchedule,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "std", serde(default, skip_serializing_if = "Option::is_none"))]
     pub bpo3: Option<ForkBlobSchedule>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "std", serde(default, skip_serializing_if = "Option::is_none"))]
     pub bpo4: Option<ForkBlobSchedule>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "std", serde(default, skip_serializing_if = "Option::is_none"))]
     pub bpo5: Option<ForkBlobSchedule>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "std", serde(default, skip_serializing_if = "Option::is_none"))]
     pub amsterdam: Option<ForkBlobSchedule>,
 }
 
@@ -203,19 +201,9 @@ fn default_bpo2_schedule() -> ForkBlobSchedule {
 }
 /// Blockchain settings defined per block
 #[allow(unused)]
-#[derive(
-    Clone,
-    Copy,
-    Debug,
-    Serialize,
-    Deserialize,
-    Default,
-    PartialEq,
-    RSerialize,
-    RDeserialize,
-    Archive,
-)]
-#[serde(rename_all = "camelCase")]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[cfg_attr(feature = "std", derive(Serialize, Deserialize, RSerialize, RDeserialize, Archive))]
+#[cfg_attr(feature = "std", serde(rename_all = "camelCase"))]
 pub struct ChainConfig {
     /// Current chain identifier
     pub chain_id: u64,
@@ -226,7 +214,7 @@ pub struct ChainConfig {
 
     pub dao_fork_block: Option<u64>,
     /// Whether the node supports or opposes the DAO hard-fork
-    #[serde(default)]
+    #[cfg_attr(feature = "std", serde(default))]
     pub dao_fork_support: bool,
 
     pub eip150_block: Option<u64>,
@@ -260,21 +248,22 @@ pub struct ChainConfig {
     pub amsterdam_time: Option<u64>,
 
     /// Amount of total difficulty reached by the network that triggers the consensus upgrade.
-    #[serde(default, with = "crate::serde_utils::u128::hex_str_opt")]
+    #[cfg_attr(feature = "std", serde(default, with = "crate::serde_utils::u128::hex_str_opt"))]
     pub terminal_total_difficulty: Option<u128>,
     /// Network has already passed the terminal total difficult
-    #[serde(default)]
+    #[cfg_attr(feature = "std", serde(default))]
     pub terminal_total_difficulty_passed: bool,
-    #[serde(default)]
+    #[cfg_attr(feature = "std", serde(default))]
     pub blob_schedule: BlobSchedule,
-    #[rkyv(with = rkyv_utils::H160Wrapper)]
+    #[cfg_attr(feature = "std", rkyv(with = rkyv_utils::H160Wrapper))]
     // Deposits system contract address
     pub deposit_contract_address: Address,
 
-    #[serde(default)]
+    #[cfg_attr(feature = "std", serde(default))]
     pub enable_verkle_at_genesis: bool,
 }
 
+#[cfg(feature = "std")]
 lazy_static::lazy_static! {
     pub static ref NETWORK_NAMES: HashMap<u64, &'static str> = {
         HashMap::from([
@@ -289,7 +278,8 @@ lazy_static::lazy_static! {
 }
 
 #[repr(u8)]
-#[derive(Debug, PartialEq, Eq, PartialOrd, Default, Hash, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Eq, PartialOrd, Default, Hash, Clone, Copy)]
+#[cfg_attr(feature = "std", derive(Serialize, Deserialize))]
 pub enum Fork {
     Frontier = 0,
     FrontierThawing = 1,
@@ -408,6 +398,7 @@ impl ChainConfig {
         self.eip155_block.is_some_and(|num| num <= block_number)
     }
 
+    #[cfg(feature = "std")]
     pub fn display_config(&self) -> String {
         let network = NETWORK_NAMES.get(&self.chain_id).unwrap_or(&"unknown");
         let mut output = format!("Chain ID: {} ({})\n\n", self.chain_id, network);
@@ -665,15 +656,16 @@ impl ChainConfig {
 }
 
 #[allow(unused)]
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "std", derive(Deserialize, Serialize))]
 pub struct GenesisAccount {
-    #[serde(default, with = "crate::serde_utils::bytes")]
+    #[cfg_attr(feature = "std", serde(default, with = "crate::serde_utils::bytes"))]
     pub code: Bytes,
-    #[serde(default)]
+    #[cfg_attr(feature = "std", serde(default))]
     pub storage: BTreeMap<U256, U256>,
-    #[serde(deserialize_with = "crate::serde_utils::u256::deser_hex_or_dec_str")]
+    #[cfg_attr(feature = "std", serde(deserialize_with = "crate::serde_utils::u256::deser_hex_or_dec_str"))]
     pub balance: U256,
-    #[serde(default, with = "crate::serde_utils::u64::hex_str")]
+    #[cfg_attr(feature = "std", serde(default, with = "crate::serde_utils::u64::hex_str"))]
     pub nonce: u64,
 }
 
@@ -711,20 +703,20 @@ impl Genesis {
         let requests_hash = self
             .config
             .is_prague_activated(self.timestamp)
-            .then_some(self.requests_hash.unwrap_or(*DEFAULT_REQUESTS_HASH));
+            .then_some(self.requests_hash.unwrap_or(DEFAULT_REQUESTS_HASH));
 
         let block_access_list_hash = self
             .config
             .is_amsterdam_activated(self.timestamp)
             .then_some(
                 self.block_access_list_hash
-                    .unwrap_or(*EMPTY_BLOCK_ACCESS_LIST_HASH),
+                    .unwrap_or(EMPTY_BLOCK_ACCESS_LIST_HASH),
             );
         let slot_number = self.slot_number;
 
         BlockHeader {
             parent_hash: H256::zero(),
-            ommers_hash: *DEFAULT_OMMERS_HASH,
+            ommers_hash: DEFAULT_OMMERS_HASH,
             coinbase: self.coinbase,
             state_root: self.compute_state_root(),
             transactions_root: compute_transactions_root(&[]),
@@ -891,7 +883,7 @@ mod tests {
         let header = genesis_block.header;
         let body = genesis_block.body;
         assert_eq!(header.parent_hash, H256::from([0; 32]));
-        assert_eq!(header.ommers_hash, *DEFAULT_OMMERS_HASH);
+        assert_eq!(header.ommers_hash, DEFAULT_OMMERS_HASH);
         assert_eq!(header.coinbase, Address::default());
         assert_eq!(
             header.state_root,

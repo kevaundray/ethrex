@@ -14,7 +14,7 @@ ethereum-types.workspace = true
 ethrex-rpc.workspace = true
 ethrex-sdk.workspace = true
 ethrex-blockchain.workspace = true
-ethrex-common.workspace = true
+ethrex-common = { workspace = true, features = ["std"] }
 ethrex-l2-common.workspace = true
 ethrex-l2-rpc.workspace = true
 eyre.workspace = true

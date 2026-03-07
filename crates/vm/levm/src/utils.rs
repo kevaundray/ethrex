@@ -13,6 +13,8 @@ use crate::{
     vm::{Substate, VM},
 };
 use ExceptionalHalt::OutOfGas;
+#[allow(unused_imports)]
+use alloc::{format, string::{String, ToString}, vec, vec::Vec};
 use bytes::Bytes;
 use ethrex_common::constants::SYSTEM_ADDRESS;
 use ethrex_common::types::Log;
@@ -24,7 +26,7 @@ use ethrex_common::{
 };
 use ethrex_common::{types::TxKind, utils::u256_from_big_endian_const};
 use ethrex_rlp;
-use std::collections::HashMap;
+use crate::sync_compat::HashMap;
 pub type Storage = HashMap<U256, H256>;
 
 // ================== Address related functions ======================
@@ -212,10 +214,10 @@ pub fn eip7702_recover_address(
     use sha2::Digest;
     use sha3::Keccak256;
 
-    if auth_tuple.s_signature > *SECP256K1_ORDER_OVER2 || U256::zero() >= auth_tuple.s_signature {
+    if auth_tuple.s_signature > SECP256K1_ORDER_OVER2 || U256::zero() >= auth_tuple.s_signature {
         return Ok(None);
     }
-    if auth_tuple.r_signature > *SECP256K1_ORDER || U256::zero() >= auth_tuple.r_signature {
+    if auth_tuple.r_signature > SECP256K1_ORDER || U256::zero() >= auth_tuple.r_signature {
         return Ok(None);
     }
     if auth_tuple.y_parity != U256::one() && auth_tuple.y_parity != U256::zero() {
@@ -276,10 +278,10 @@ pub fn eip7702_recover_address(
     use ethrex_crypto::keccak::keccak_hash;
     use ethrex_rlp::encode::RLPEncode;
 
-    if auth_tuple.s_signature > *SECP256K1_ORDER_OVER2 || U256::zero() >= auth_tuple.s_signature {
+    if auth_tuple.s_signature > SECP256K1_ORDER_OVER2 || U256::zero() >= auth_tuple.s_signature {
         return Ok(None);
     }
-    if auth_tuple.r_signature > *SECP256K1_ORDER || U256::zero() >= auth_tuple.r_signature {
+    if auth_tuple.r_signature > SECP256K1_ORDER || U256::zero() >= auth_tuple.r_signature {
         return Ok(None);
     }
     if auth_tuple.y_parity != U256::one() && auth_tuple.y_parity != U256::zero() {

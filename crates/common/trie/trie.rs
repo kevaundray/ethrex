@@ -1,29 +1,41 @@
+#![cfg_attr(not(feature = "std"), no_std)]
+
+extern crate alloc;
+
 pub mod db;
 pub mod error;
+#[cfg(feature = "std")]
 pub mod logger;
 mod nibbles;
 pub mod node;
 mod node_hash;
 pub mod rkyv_utils;
 mod rlp;
+pub(crate) mod sync_compat;
 #[cfg(test)]
 mod test_utils;
+#[cfg(feature = "std")]
 pub mod threadpool;
 mod trie_iter;
+#[cfg(feature = "std")]
 pub mod trie_sorted;
+#[cfg(feature = "std")]
 mod verify_range;
+use alloc::{boxed::Box, collections::BTreeMap, format, vec, vec::Vec};
 use ethereum_types::H256;
-use ethrex_crypto::keccak::keccak_hash;
 use ethrex_rlp::constants::RLP_NULL;
 use ethrex_rlp::encode::RLPEncode;
-use rustc_hash::FxHashSet;
-use std::collections::BTreeMap;
-use std::sync::{Arc, Mutex};
+use rustc_hash::FxBuildHasher;
+type FxHashSet<V> = hashbrown::HashSet<V, FxBuildHasher>;
+use sync_compat::{Arc, Mutex};
 
 pub use self::db::{InMemoryTrieDB, TrieDB};
+#[cfg(feature = "std")]
 pub use self::logger::{TrieLogger, TrieWitness};
 pub use self::nibbles::Nibbles;
+#[cfg(feature = "std")]
 pub use self::threadpool::ThreadPool;
+#[cfg(feature = "std")]
 pub use self::verify_range::verify_range;
 pub use self::{
     node::{Node, NodeRef},
@@ -34,14 +46,15 @@ pub use self::error::{ExtensionNodeErrorData, InconsistentTreeError, TrieError};
 use self::{node::LeafNode, trie_iter::TrieIterator};
 
 use ethrex_rlp::decode::RLPDecode;
-use lazy_static::lazy_static;
 
-lazy_static! {
-    // Hash value for an empty trie, equal to keccak(RLP_NULL)
-    pub static ref EMPTY_TRIE_HASH: H256 = H256(
-        keccak_hash([RLP_NULL]),
-    );
-}
+// Hash value for an empty trie, equal to keccak(RLP_NULL)
+// This is a well-known constant: keccak256([0x80])
+pub const EMPTY_TRIE_HASH: H256 = H256([
+    0x56, 0xe8, 0x1f, 0x17, 0x1b, 0xcc, 0x55, 0xa6,
+    0xff, 0x83, 0x45, 0xe6, 0x92, 0xc0, 0xf8, 0x6e,
+    0x5b, 0x48, 0xe0, 0x1b, 0x99, 0x6c, 0xad, 0xc0,
+    0x01, 0x62, 0x2f, 0xb5, 0xe3, 0x63, 0xb4, 0x21,
+]);
 
 /// RLP-encoded trie path
 pub type PathRLP = Vec<u8>;
@@ -81,7 +94,7 @@ impl Trie {
     pub fn open(db: Box<dyn TrieDB>, root: H256) -> Self {
         Self {
             db,
-            root: if root != *EMPTY_TRIE_HASH {
+            root: if root != EMPTY_TRIE_HASH {
                 NodeHash::from(root).into()
             } else {
                 Default::default()
@@ -193,7 +206,7 @@ impl Trie {
             let mut buf = Vec::with_capacity(512);
             self.root.compute_hash_no_alloc(&mut buf).finalize()
         } else {
-            *EMPTY_TRIE_HASH
+            EMPTY_TRIE_HASH
         }
     }
 
@@ -239,7 +252,7 @@ impl Trie {
         if self.root.is_valid() {
             self.root.commit(Nibbles::default(), &mut acc);
         }
-        if self.root.compute_hash() == NodeHash::Hashed(*EMPTY_TRIE_HASH) {
+        if self.root.compute_hash() == NodeHash::Hashed(EMPTY_TRIE_HASH) {
             acc.push((Nibbles::default(), vec![RLP_NULL]))
         }
         acc.extend(self.pending_removal.drain().map(|nib| (nib, vec![])));
@@ -313,7 +326,7 @@ impl Trie {
         root_hash: H256,
     ) -> Result<NodeRef, TrieError> {
         // If the root hash is of the empty trie then we can get away by setting the NodeRef to default
-        if root_hash == *EMPTY_TRIE_HASH {
+        if root_hash == EMPTY_TRIE_HASH {
             return Ok(NodeRef::default());
         }
 
@@ -565,6 +578,7 @@ impl Trie {
 
     /// Validate the trie structure in parallel by splitting at the root branch node.
     /// Each of the root's 16 subtrees is validated independently using rayon.
+    #[cfg(feature = "std")]
     pub fn validate_parallel(self) -> Result<(), TrieError> {
         use rayon::prelude::*;
 
@@ -603,6 +617,7 @@ impl Trie {
     }
 }
 
+#[cfg(feature = "std")]
 /// Validate a subtree rooted at `start_ref`, checking that all referenced nodes exist
 /// and their hashes match.
 fn validate_subtree(

@@ -1,21 +1,28 @@
+#[allow(unused_imports)]
+use alloc::{borrow::ToOwned, string::{String, ToString}, vec::Vec};
 use bytes::Bytes;
-use derive_more::derive::Display;
 use ethrex_common::{
     Address, H256, U256,
     types::{FakeExponentialError, Log},
 };
+#[cfg(feature = "std")]
 use serde::{Deserialize, Serialize};
 use thiserror;
 
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error, Serialize, Deserialize, Display)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[cfg_attr(feature = "std", derive(Serialize, Deserialize))]
 pub enum VMError {
     /// Errors that break execution, they shouldn't ever happen. Contains subcategory `DatabaseError`.
+    #[error("Internal error: {0}")]
     Internal(#[from] InternalError),
     /// Returned when a transaction doesn't pass all validations before executing.
+    #[error("Transaction validation error: {0}")]
     TxValidation(#[from] TxValidationError),
     /// Errors contemplated by the EVM, they revert and consume all gas of the current context.
+    #[error("Exceptional halt: {0}")]
     ExceptionalHalt(#[from] ExceptionalHalt),
     /// Revert Opcode called. It behaves like ExceptionalHalt, except it doesn't consume all gas left.
+    #[error("Revert opcode")]
     RevertOpcode,
 }
 
@@ -46,13 +53,14 @@ impl From<PrecompileError> for VMError {
 
 /// Useful to use ? in try_into, specially when slicing with known bounds to fixed size arrays,
 /// which is a error that never really happens.
-impl From<std::array::TryFromSliceError> for VMError {
-    fn from(_: std::array::TryFromSliceError) -> Self {
+impl From<core::array::TryFromSliceError> for VMError {
+    fn from(_: core::array::TryFromSliceError) -> Self {
         VMError::Internal(InternalError::TypeConversion)
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[cfg_attr(feature = "std", derive(Serialize, Deserialize))]
 pub enum ExceptionalHalt {
     #[error("Stack Underflow")]
     StackUnderflow,
@@ -82,7 +90,8 @@ pub enum ExceptionalHalt {
 
 // Error strings are attached to execution-spec-tests mapping https://github.com/ethereum/execution-spec-tests
 // If any change is made here without changing the mapper it will break some hive tests.
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[cfg_attr(feature = "std", derive(Serialize, Deserialize))]
 pub enum TxValidationError {
     #[error("Sender account {0} shouldn't be a contract")]
     SenderNotEOA(Address),
@@ -148,7 +157,8 @@ pub enum TxValidationError {
     TxMaxGasLimitExceeded { tx_hash: H256, tx_gas_limit: u64 },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[cfg_attr(feature = "std", derive(Serialize, Deserialize))]
 pub enum InternalError {
     #[error("Arithmetic operation overflowed")]
     Overflow,
@@ -189,7 +199,8 @@ impl InternalError {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[cfg_attr(feature = "std", derive(Serialize, Deserialize))]
 pub enum PrecompileError {
     #[error("Error while parsing the calldata")]
     ParsingInputError,
@@ -213,7 +224,8 @@ pub enum PrecompileError {
     CoordinateExceedsFieldModulus,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[cfg_attr(feature = "std", derive(Serialize, Deserialize))]
 pub enum DatabaseError {
     #[error("{0}")]
     Custom(String),
@@ -225,13 +237,15 @@ pub enum OpcodeResult {
     Halt,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "std", derive(Serialize, Deserialize))]
 pub enum TxResult {
     Success,
     Revert(VMError),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "std", derive(Serialize, Deserialize))]
 pub struct ExecutionReport {
     pub result: TxResult,
     /// Gas used before refunds (for block-level accounting).

@@ -1,3 +1,5 @@
+use alloc::vec::Vec;
+
 use ethereum_types::Address;
 use ethrex_crypto::keccak::keccak_hash;
 use ethrex_rlp::encode::RLPEncode;

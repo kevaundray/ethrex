@@ -1,3 +1,4 @@
+use alloc::string::String;
 use thiserror::Error;
 
 // TODO: improve errors
@@ -13,6 +14,7 @@ pub enum RLPDecodeError {
     UnexpectedList,
     #[error("UnexpectedString")]
     UnexpectedString,
+    #[cfg(feature = "std")]
     #[error("InvalidCompression")]
     InvalidCompression(#[from] snap::Error),
     #[error("IncompatibleProtocol: {0}")]
@@ -24,6 +26,7 @@ pub enum RLPDecodeError {
 // TODO: improve errors
 #[derive(Debug, Error)]
 pub enum RLPEncodeError {
+    #[cfg(feature = "std")]
     #[error("InvalidCompression")]
     InvalidCompression(#[from] snap::Error),
     #[error("{0}")]

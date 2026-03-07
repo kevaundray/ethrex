@@ -1,11 +1,9 @@
 use ethrex_common::{H256, U256};
-use k256::elliptic_curve::bigint::Encoding;
+#[cfg(feature = "std")]
 use p256::{
     FieldElement as P256FieldElement, NistP256,
     elliptic_curve::{Curve, bigint::U256 as P256Uint, ff::PrimeField},
 };
-use std::sync::LazyLock;
-
 pub const WORD_SIZE_IN_BYTES_USIZE: usize = 32;
 pub const WORD_SIZE_IN_BYTES_U64: u64 = 32;
 
@@ -72,12 +70,19 @@ pub const VALID_BLOB_PREFIXES: [u8; 2] = [0x01, 0x02];
 pub const LAST_AVAILABLE_BLOCK_LIMIT: u64 = 256;
 
 // EIP7702 - EOA Load Code
-pub static SECP256K1_ORDER: LazyLock<U256> = LazyLock::new(||
-        // we use the k256 crate instead of the secp256k1 because the latter is optional
-        // while the former is not, this is to avoid a conditional compilation attribute.
-        U256::from_big_endian(&k256::Secp256k1::ORDER.to_be_bytes()));
-pub static SECP256K1_ORDER_OVER2: std::sync::LazyLock<U256> =
-    LazyLock::new(|| *SECP256K1_ORDER / U256::from(2));
+// secp256k1 order: 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141
+pub const SECP256K1_ORDER: U256 = U256([
+    0xBFD25E8CD0364141,
+    0xBAAEDCE6AF48A03B,
+    0xFFFFFFFFFFFFFFFE,
+    0xFFFFFFFFFFFFFFFF,
+]);
+pub const SECP256K1_ORDER_OVER2: U256 = U256([
+    0xDFE92F46681B20A0,
+    0x5D576E7357A4501D,
+    0xFFFFFFFFFFFFFFFF,
+    0x7FFFFFFFFFFFFFFF,
+]);
 pub const MAGIC: u8 = 0x05;
 pub const SET_CODE_DELEGATION_BYTES: [u8; 3] = [0xef, 0x01, 0x00];
 // Set the code of authority to be 0xef0100 || address. This is a delegation designation.
@@ -86,16 +91,34 @@ pub const EIP7702_DELEGATED_CODE_LEN: usize = 23;
 pub const PER_AUTH_BASE_COST: u64 = 12500;
 pub const PER_EMPTY_ACCOUNT_COST: u64 = 25000;
 
-// Secp256r1 curve parameters
-// See https://eips.ethereum.org/EIPS/eip-7951
-pub const P256_P: P256Uint = P256Uint::from_be_hex(P256FieldElement::MODULUS);
-pub const P256_N: P256Uint = NistP256::ORDER;
-pub const P256_A: P256FieldElement = P256FieldElement::from_u64(3).neg();
-pub const P256_B_UINT: P256Uint =
-    P256Uint::from_be_hex("5ac635d8aa3a93e7b3ebbd55769886bc651d06b0cc53b0f63bce3c3e27d2604b");
-lazy_static::lazy_static! {
-    pub static ref P256_B: P256FieldElement = P256FieldElement::from_uint(P256_B_UINT).unwrap();
+#[cfg(feature = "std")]
+mod p256_constants {
+    use super::*;
+    use p256::{
+        FieldElement as P256FieldElement, NistP256,
+        elliptic_curve::{Curve, bigint::U256 as P256Uint, ff::PrimeField},
+    };
+
+    // Secp256r1 curve parameters
+    // See https://eips.ethereum.org/EIPS/eip-7951
+    pub const P256_P: P256Uint = P256Uint::from_be_hex(P256FieldElement::MODULUS);
+    pub const P256_N: P256Uint = NistP256::ORDER;
+    pub const P256_A: P256FieldElement = P256FieldElement::from_u64(3).neg();
+    pub const P256_B_UINT: P256Uint =
+        P256Uint::from_be_hex("5ac635d8aa3a93e7b3ebbd55769886bc651d06b0cc53b0f63bce3c3e27d2604b");
+    static P256_B_LOCK: crate::sync_compat::OnceLock<P256FieldElement> =
+        crate::sync_compat::OnceLock::new();
+
+    /// Returns the P256 curve parameter B as a field element.
+    pub fn p256_b() -> &'static P256FieldElement {
+        P256_B_LOCK.get_or_init(|| {
+            #[expect(clippy::unwrap_used, reason = "constant value is always valid")]
+            P256FieldElement::from_uint(P256_B_UINT).unwrap()
+        })
+    }
 }
+#[cfg(feature = "std")]
+pub use p256_constants::*;
 
 /// EIP-7708: keccak256('Transfer(address,address,uint256)')
 pub const TRANSFER_EVENT_TOPIC: H256 = H256([

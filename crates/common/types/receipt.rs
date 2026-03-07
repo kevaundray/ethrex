@@ -1,3 +1,5 @@
+use alloc::{format, string::ToString, vec, vec::Vec};
+
 use bytes::Bytes;
 use ethereum_types::{Address, Bloom, BloomInput, H256};
 use ethrex_crypto::keccak::keccak_hash;
@@ -7,13 +9,15 @@ use ethrex_rlp::{
     error::RLPDecodeError,
     structs::{Decoder, Encoder},
 };
+#[cfg(feature = "std")]
 use serde::{Deserialize, Serialize};
 
 use crate::types::TxType;
 pub type Index = u64;
 
 /// Result of a transaction
-#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "std", derive(Deserialize, Serialize))]
 pub struct Receipt {
     pub tx_type: TxType,
     pub succeeded: bool,
@@ -111,7 +115,8 @@ impl RLPDecode for Receipt {
 }
 
 /// Result of a transaction
-#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "std", derive(Deserialize, Serialize))]
 pub struct ReceiptWithBloom {
     pub tx_type: TxType,
     pub succeeded: bool,
@@ -301,7 +306,8 @@ impl From<&ReceiptWithBloom> for Receipt {
 }
 
 /// Data record produced during the execution of a transaction.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "std", derive(Serialize, Deserialize))]
 pub struct Log {
     pub address: Address,
     pub topics: Vec<H256>,

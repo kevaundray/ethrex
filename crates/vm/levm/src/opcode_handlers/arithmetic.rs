@@ -21,7 +21,7 @@ use crate::{
     vm::VM,
 };
 use ethrex_common::{U256, U512};
-use std::cmp::Ordering;
+use core::cmp::Ordering;
 
 /// Implementation for the `ADD` opcode.
 pub struct OpAddHandler;
@@ -227,7 +227,7 @@ impl OpcodeHandler for OpMulModHandler {
 
             #[cfg(feature = "zisk")]
             let res = unsafe {
-                use std::mem::MaybeUninit;
+                use core::mem::MaybeUninit;
                 use ziskos::zisklib::mulmod256_c;
 
                 let mut res = MaybeUninit::<[u64; 4]>::uninit();

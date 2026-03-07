@@ -1,5 +1,9 @@
-use std::ops::AddAssign;
+use alloc::vec::Vec;
+#[cfg(test)]
+use alloc::vec;
+use core::ops::AddAssign;
 
+#[cfg(feature = "std")]
 use crate::serde_utils;
 #[cfg(feature = "c-kzg")]
 use crate::types::Fork;
@@ -12,6 +16,7 @@ use ethrex_rlp::{
     error::RLPDecodeError,
     structs::{Decoder, Encoder},
 };
+#[cfg(feature = "std")]
 use serde::{Deserialize, Serialize};
 
 use super::{BYTES_PER_BLOB, SAFE_BYTES_PER_BLOB};
@@ -21,17 +26,18 @@ pub type Blob = [u8; BYTES_PER_BLOB];
 pub type Commitment = Bytes48;
 pub type Proof = Bytes48;
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "std", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "std", serde(rename_all = "camelCase"))]
 /// Struct containing all the blobs for a blob transaction, along with the corresponding commitments and proofs
 pub struct BlobsBundle {
-    #[serde(with = "serde_utils::blob::vec")]
+    #[cfg_attr(feature = "std", serde(with = "serde_utils::blob::vec"))]
     pub blobs: Vec<Blob>,
-    #[serde(with = "serde_utils::bytes48::vec")]
+    #[cfg_attr(feature = "std", serde(with = "serde_utils::bytes48::vec"))]
     pub commitments: Vec<Commitment>,
-    #[serde(with = "serde_utils::bytes48::vec")]
+    #[cfg_attr(feature = "std", serde(with = "serde_utils::bytes48::vec"))]
     pub proofs: Vec<Proof>,
-    #[serde(skip, default)]
+    #[cfg_attr(feature = "std", serde(skip, default))]
     pub version: u8,
 }
 

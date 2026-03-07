@@ -9,11 +9,11 @@ license.workspace = true
 [dependencies]
 ethrex.workspace = true
 ethrex-blockchain.workspace = true
-ethrex-common.workspace = true
+ethrex-common = { workspace = true, features = ["std"] }
 ethrex-config.workspace = true
 ethrex-storage.workspace = true
 
-bytes.workspace = true
+bytes = { workspace = true, features = ["serde"] }
 tokio.workspace = true
 serde_json.workspace = true
 

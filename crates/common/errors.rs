@@ -1,3 +1,5 @@
+use alloc::string::String;
+
 use crate::types::{InvalidBlockBodyError, InvalidBlockHeaderError};
 
 #[derive(thiserror::Error, Debug)]
@@ -17,7 +19,19 @@ pub enum EcdsaError {
         not(feature = "secp256k1")
     ))]
     #[error("k256 error: {0}")]
-    K256(#[from] k256::ecdsa::Error),
+    K256(k256::ecdsa::Error),
+}
+
+#[cfg(any(
+    feature = "zisk",
+    feature = "risc0",
+    feature = "sp1",
+    not(feature = "secp256k1")
+))]
+impl From<k256::ecdsa::Error> for EcdsaError {
+    fn from(err: k256::ecdsa::Error) -> Self {
+        EcdsaError::K256(err)
+    }
 }
 
 /// Errors that occur during block validation.

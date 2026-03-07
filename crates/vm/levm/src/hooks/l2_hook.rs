@@ -8,6 +8,8 @@ use crate::{
     vm::{VM, VMType},
 };
 
+#[allow(unused_imports)]
+use alloc::{borrow::ToOwned, format, string::{String, ToString}, vec, vec::Vec};
 use bytes::Bytes;
 use ethrex_common::{
     Address, H160, H256, U256,
