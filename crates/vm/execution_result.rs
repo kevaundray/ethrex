@@ -1,3 +1,4 @@
+use alloc::{string::{String, ToString}, vec, vec::Vec};
 use bytes::Bytes;
 use ethrex_common::types::Log;
 use ethrex_levm::errors::{ExecutionReport as LevmExecutionReport, TxResult};

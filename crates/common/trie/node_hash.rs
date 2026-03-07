@@ -1,3 +1,4 @@
+use alloc::vec::Vec;
 use ethereum_types::H256;
 use ethrex_crypto::keccak::keccak_hash;
 use ethrex_rlp::{decode::RLPDecode, encode::RLPEncode, error::RLPDecodeError, structs::Encoder};

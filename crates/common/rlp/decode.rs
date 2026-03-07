@@ -1,3 +1,4 @@
+use alloc::{string::String, vec::Vec};
 use super::{
     constants::{RLP_EMPTY_LIST, RLP_NULL},
     error::RLPDecodeError,
@@ -6,7 +7,10 @@ use bytes::{Bytes, BytesMut};
 use ethereum_types::{
     Address, Bloom, H32, H64, H128, H160, H256, H264, H512, H520, Signature, U256,
 };
+#[cfg(feature = "std")]
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+#[cfg(not(feature = "std"))]
+use core::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
 /// Max payload size accepted when decoding.
 /// While technically any size is RLP spec-compliant, there are no well-formed messages

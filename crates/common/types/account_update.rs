@@ -2,10 +2,13 @@ use crate::{
     Address, H256, U256,
     types::{AccountInfo, Code},
 };
-use rustc_hash::FxHashMap;
+use rustc_hash::FxBuildHasher;
+type FxHashMap<K, V> = hashbrown::HashMap<K, V, FxBuildHasher>;
+#[cfg(feature = "std")]
 use serde::{Deserialize, Serialize};
 
-#[derive(Default, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Default, Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "std", derive(Serialize, Deserialize))]
 pub struct AccountUpdate {
     pub address: Address,
     pub removed: bool,

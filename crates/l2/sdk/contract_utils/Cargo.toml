@@ -7,7 +7,7 @@ documentation.workspace = true
 license.workspace = true
 
 [dependencies]
-thiserror.workspace = true
+thiserror = { workspace = true, features = ["std"] }
 tracing.workspace = true
 
 [lints]

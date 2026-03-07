@@ -3,7 +3,7 @@
 //! Includes the following opcodes:
 //!   - `LOG0` to `LOG4`
 
-use std::mem;
+use core::mem;
 
 use crate::{
     errors::{ExceptionalHalt, OpcodeResult, VMError},

@@ -1,3 +1,4 @@
+use alloc::string::String;
 use ethrex_common::InvalidBlockError;
 use ethrex_common::types::InvalidBlockBodyError;
 use ethrex_common::types::block_execution_witness::GuestProgramStateError;

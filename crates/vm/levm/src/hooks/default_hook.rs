@@ -8,6 +8,8 @@ use crate::{
     vm::VM,
 };
 
+#[allow(unused_imports)]
+use alloc::{string::{String, ToString}, vec, vec::Vec};
 use bytes::Bytes;
 use ethrex_common::{
     Address, H256, U256,
@@ -582,7 +584,7 @@ pub fn set_bytecode_and_code_address(vm: &mut VM<'_>) -> Result<(), VMError> {
     // Get bytecode and code_address for assigning those values to the callframe.
     let (bytecode, code_address) = if vm.is_create()? {
         // Here bytecode is the calldata and the code_address is just the created contract address.
-        let calldata = std::mem::take(&mut vm.current_call_frame.calldata);
+        let calldata = core::mem::take(&mut vm.current_call_frame.calldata);
         (
             // SAFETY: we don't need the hash for the initcode
             Code::from_bytecode_unchecked(calldata, H256::zero()),

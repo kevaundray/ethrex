@@ -88,7 +88,7 @@ impl<'a> VM<'a> {
             result: TxResult::Success,
             gas_used,
             gas_spent: gas_used, // Will be updated in finalize_execution
-            output: std::mem::take(&mut self.current_call_frame.output),
+            output: core::mem::take(&mut self.current_call_frame.output),
         })
     }
 
@@ -114,7 +114,7 @@ impl<'a> VM<'a> {
             result: TxResult::Revert(error),
             gas_used,
             gas_spent: gas_used, // Will be updated in finalize_execution
-            output: std::mem::take(&mut callframe.output),
+            output: core::mem::take(&mut callframe.output),
         })
     }
 

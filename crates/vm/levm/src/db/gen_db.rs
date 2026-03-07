@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use crate::sync_compat::Arc;
 
 use ethrex_common::Address;
 use ethrex_common::H256;
@@ -19,8 +19,11 @@ use crate::utils::account_to_levm_account;
 use crate::utils::restore_cache_state;
 use crate::vm::VM;
 pub use ethrex_common::types::AccountUpdate;
-use rustc_hash::FxHashMap;
-use std::collections::hash_map::Entry;
+use alloc::{format, string::ToString, vec, vec::Vec};
+use hashbrown::hash_map::Entry;
+
+use rustc_hash::FxBuildHasher;
+type FxHashMap<K, V> = hashbrown::HashMap<K, V, FxBuildHasher>;
 
 pub type CacheDB = FxHashMap<Address, LevmAccount>;
 
@@ -245,7 +248,7 @@ impl GeneralizedDatabase {
         use ethrex_common::constants::EMPTY_KECCACK_HASH;
 
         let code_hash = self.get_account(address)?.info.code_hash;
-        if code_hash == *EMPTY_KECCACK_HASH {
+        if code_hash == EMPTY_KECCACK_HASH {
             return Ok(0);
         }
         let metadata = self.get_code_metadata(code_hash)?;

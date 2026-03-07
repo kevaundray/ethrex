@@ -1,8 +1,11 @@
-use std::collections::{BTreeMap, BTreeSet};
+use alloc::{collections::BTreeMap, collections::BTreeSet, format, string::String, string::ToString, vec::Vec};
 
+#[cfg(feature = "std")]
 use bytes::Bytes;
 
+#[cfg(feature = "std")]
 use crate::rkyv_utils::H160Wrapper;
+#[cfg(feature = "std")]
 use crate::serde_utils;
 use crate::types::{Block, Code, CodeMetadata};
 use crate::{
@@ -14,7 +17,9 @@ use ethrex_crypto::keccak::keccak_hash;
 use ethrex_rlp::error::RLPDecodeError;
 use ethrex_rlp::{decode::RLPDecode, encode::RLPEncode};
 use ethrex_trie::{EMPTY_TRIE_HASH, Node, Trie, TrieError};
+#[cfg(feature = "std")]
 use rkyv::with::{Identity, MapKV};
+#[cfg(feature = "std")]
 use serde::{Deserialize, Serialize};
 
 /// State produced by the guest program execution inside the zkVM. It is
@@ -60,15 +65,14 @@ pub struct GuestProgramState {
 ///
 /// It is essentially an `RpcExecutionWitness` but it also contains `ChainConfig`,
 /// and `first_block_number`.
-#[derive(
-    Default, Serialize, Deserialize, rkyv::Serialize, rkyv::Deserialize, rkyv::Archive, Clone,
-)]
+#[derive(Default, Clone)]
+#[cfg_attr(feature = "std", derive(Serialize, Deserialize, rkyv::Serialize, rkyv::Deserialize, rkyv::Archive))]
 pub struct ExecutionWitness {
     // Contract bytecodes needed for stateless execution.
-    #[rkyv(with = crate::rkyv_utils::VecVecWrapper)]
+    #[cfg_attr(feature = "std", rkyv(with = crate::rkyv_utils::VecVecWrapper))]
     pub codes: Vec<Vec<u8>>,
     /// RLP-encoded block headers needed for stateless execution.
-    #[rkyv(with = crate::rkyv_utils::VecVecWrapper)]
+    #[cfg_attr(feature = "std", rkyv(with = crate::rkyv_utils::VecVecWrapper))]
     pub block_headers_bytes: Vec<Vec<u8>>,
     /// The block number of the first block
     pub first_block_number: u64,
@@ -77,11 +81,11 @@ pub struct ExecutionWitness {
     /// Root node embedded with the rest of the trie's nodes
     pub state_trie_root: Option<Node>,
     /// Root nodes per account storage embedded with the rest of the trie's nodes
-    #[rkyv(with = MapKV<H160Wrapper, Identity>)]
+    #[cfg_attr(feature = "std", rkyv(with = MapKV<H160Wrapper, Identity>))]
     pub storage_trie_roots: BTreeMap<Address, Node>,
     /// Flattened map of account addresses and storage keys whose values
     /// are needed for stateless execution.
-    #[rkyv(with = crate::rkyv_utils::VecVecWrapper)]
+    #[cfg_attr(feature = "std", rkyv(with = crate::rkyv_utils::VecVecWrapper))]
     pub keys: Vec<Vec<u8>>,
 }
 
@@ -90,6 +94,7 @@ pub struct ExecutionWitness {
 /// This is the format returned by the `debug_executionWitness` RPC method.
 /// The trie nodes are pre-serialized (via `encode_subtrie`) to avoid
 /// expensive traversal on every RPC request.
+#[cfg(feature = "std")]
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct RpcExecutionWitness {
     #[serde(
@@ -114,6 +119,7 @@ pub struct RpcExecutionWitness {
     pub headers: Vec<Bytes>,
 }
 
+#[cfg(feature = "std")]
 impl TryFrom<ExecutionWitness> for RpcExecutionWitness {
     type Error = TrieError;
 
@@ -258,7 +264,7 @@ impl GuestProgramState {
                     None => AccountState::default(),
                 };
                 if update.removed_storage {
-                    account_state.storage_root = *EMPTY_TRIE_HASH;
+                    account_state.storage_root = EMPTY_TRIE_HASH;
                 }
                 if let Some(info) = &update.info {
                     account_state.nonce = info.nonce;
@@ -422,7 +428,7 @@ impl GuestProgramState {
     /// Retrieves the account code for a specific account.
     /// Returns an Err if the code is not found.
     pub fn get_account_code(&self, code_hash: H256) -> Result<Code, GuestProgramStateError> {
-        if code_hash == *EMPTY_KECCACK_HASH {
+        if code_hash == EMPTY_KECCACK_HASH {
             return Ok(Code::default());
         }
         match self.codes_hashed.get(&code_hash) {
@@ -431,6 +437,7 @@ impl GuestProgramState {
                 // We do this because what usually happens is that the Witness doesn't have the code we asked for but it is because it isn't relevant for that particular case.
                 // In client implementations there are differences and it's natural for some clients to access more/less information in some edge cases.
                 // Sidenote: logger doesn't work inside SP1, that's why we use println!
+                #[cfg(feature = "std")]
                 println!(
                     "Missing bytecode for hash {} in witness. Defaulting to empty code.", // If there's a state root mismatch and this prints we have to see if it's the cause or not.
                     hex::encode(code_hash)
@@ -448,7 +455,7 @@ impl GuestProgramState {
     ) -> Result<CodeMetadata, GuestProgramStateError> {
         use crate::constants::EMPTY_KECCACK_HASH;
 
-        if code_hash == *EMPTY_KECCACK_HASH {
+        if code_hash == EMPTY_KECCACK_HASH {
             return Ok(CodeMetadata { length: 0 });
         }
         match self.codes_hashed.get(&code_hash) {
@@ -457,6 +464,7 @@ impl GuestProgramState {
             }),
             None => {
                 // Same as get_account_code - default to empty for missing bytecode
+                #[cfg(feature = "std")]
                 println!(
                     "Missing bytecode for hash {} in witness. Defaulting to empty code metadata.",
                     hex::encode(code_hash)
@@ -510,7 +518,7 @@ impl GuestProgramState {
                 return Ok(None);
             };
             let storage_trie = match self.storage_tries.get(&address) {
-                None if storage_root == *EMPTY_TRIE_HASH => return Ok(None),
+                None if storage_root == EMPTY_TRIE_HASH => return Ok(None),
                 Some(trie) if trie.hash_no_commit() == storage_root => trie,
                 _ => {
                     return Err(GuestProgramStateError::Custom(format!(

@@ -1,13 +1,18 @@
+use alloc::{vec, vec::Vec};
+
 use crate::H256;
 use bytes::Bytes;
 use ethereum_types::Address;
 use ethrex_rlp::{decode::RLPDecode, encode::RLPEncode, error::RLPDecodeError};
+#[cfg(feature = "std")]
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+#[cfg(feature = "std")]
 use tracing::error;
 
 use super::{Bytes48, Receipt};
 use crate::constants::DEPOSIT_TOPIC;
+#[cfg(feature = "std")]
 use crate::serde_utils;
 
 pub type Bytes32 = [u8; 32];
@@ -25,6 +30,7 @@ impl EncodedRequests {
     }
 }
 
+#[cfg(feature = "std")]
 impl<'de> Deserialize<'de> for EncodedRequests {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
@@ -36,6 +42,7 @@ impl<'de> Deserialize<'de> for EncodedRequests {
     }
 }
 
+#[cfg(feature = "std")]
 impl Serialize for EncodedRequests {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -70,12 +77,12 @@ impl Requests {
         let bytes: Vec<u8> = match self {
             Requests::Deposit(deposits) => {
                 let deposit_data = deposits.iter().flat_map(|d| d.to_summarized_byte_array());
-                std::iter::once(DEPOSIT_TYPE).chain(deposit_data).collect()
+                core::iter::once(DEPOSIT_TYPE).chain(deposit_data).collect()
             }
-            Requests::Withdrawal(data) => std::iter::once(WITHDRAWAL_TYPE)
+            Requests::Withdrawal(data) => core::iter::once(WITHDRAWAL_TYPE)
                 .chain(data.iter().cloned())
                 .collect(),
-            Requests::Consolidation(data) => std::iter::once(CONSOLIDATION_TYPE)
+            Requests::Consolidation(data) => core::iter::once(CONSOLIDATION_TYPE)
                 .chain(data.iter().cloned())
                 .collect(),
         };
@@ -96,7 +103,7 @@ impl Requests {
                     && log
                         .topics
                         .first()
-                        .is_some_and(|topic| topic == &*DEPOSIT_TOPIC)
+                        .is_some_and(|topic| topic == &DEPOSIT_TOPIC)
                 {
                     deposits.push(Deposit::from_abi_byte_array(&log.data)?);
                 }
@@ -128,6 +135,7 @@ pub struct Deposit {
 impl Deposit {
     pub fn from_abi_byte_array(data: &[u8]) -> Option<Deposit> {
         if data.len() != 576 {
+            #[cfg(feature = "std")]
             error!("Wrong data length when parsing deposit.");
             return None;
         }

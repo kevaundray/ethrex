@@ -26,7 +26,7 @@ impl Hook for BackupHook {
         // We want to restore to the initial state, this includes saving the changes made by the prepare execution
         // and the changes made by the execution itself.
         let mut execution_backup = vm.current_call_frame.call_frame_backup.clone();
-        let pre_execution_backup = std::mem::take(&mut self.pre_execution_backup);
+        let pre_execution_backup = core::mem::take(&mut self.pre_execution_backup);
         execution_backup.extend(pre_execution_backup);
         vm.db.tx_backup = Some(execution_backup);
 

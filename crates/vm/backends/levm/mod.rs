@@ -1,4 +1,5 @@
 pub mod db;
+#[cfg(feature = "std")]
 mod tracing;
 
 use super::BlockExecutionResult;
@@ -20,10 +21,12 @@ use ethrex_common::{
     Address, BigEndianHash, H256, U256,
     types::{
         AccessList, AccountUpdate, Block, BlockHeader, EIP1559Transaction, Fork, GWEI_TO_WEI,
-        GenericTransaction, INITIAL_BASE_FEE, Receipt, Transaction, TxKind, TxType, Withdrawal,
+        INITIAL_BASE_FEE, Receipt, Transaction, TxKind, TxType, Withdrawal,
         requests::Requests,
     },
 };
+#[cfg(feature = "std")]
+use ethrex_common::types::GenericTransaction;
 use ethrex_levm::EVMConfig;
 use ethrex_levm::account::{AccountStatus, LevmAccount};
 use ethrex_levm::call_frame::Stack;
@@ -43,11 +46,16 @@ use ethrex_levm::{
     errors::{ExecutionReport, TxResult, VMError},
     vm::VM,
 };
+#[cfg(feature = "std")]
 use rayon::iter::{IntoParallelIterator, IntoParallelRefIterator, ParallelIterator};
-use rustc_hash::FxHashMap;
-use std::cmp::min;
-use std::sync::Arc;
+use rustc_hash::FxBuildHasher;
+type FxHashMap<K, V> = hashbrown::HashMap<K, V, FxBuildHasher>;
+use core::cmp::min;
+use alloc::sync::Arc;
+use alloc::{format, string::{String, ToString}, vec, vec::Vec};
+#[cfg(feature = "std")]
 use std::sync::atomic::{AtomicUsize, Ordering};
+#[cfg(feature = "std")]
 use std::sync::mpsc::Sender;
 
 /// The struct implements the following functions:
@@ -181,6 +189,7 @@ impl LEVM {
         ))
     }
 
+    #[cfg(feature = "std")]
     pub fn execute_block_pipeline(
         block: &Block,
         db: &mut GeneralizedDatabase,
@@ -372,6 +381,7 @@ impl LEVM {
     /// For each account in the BAL, extracts the **final** post-block state
     /// (highest `block_access_index` entry per field) and builds an AccountUpdate.
     /// State comes entirely from the BAL — no execution needed.
+    #[cfg(feature = "std")]
     fn bal_to_account_updates(
         bal: &BlockAccessList,
         store: &dyn Database,
@@ -430,7 +440,7 @@ impl LEVM {
             // Final code: last entry or prestate
             let (code_hash, code) = if let Some(c) = acct_changes.code_changes.last() {
                 if c.new_code.is_empty() {
-                    (*EMPTY_KECCACK_HASH, None)
+                    (EMPTY_KECCACK_HASH, None)
                 } else {
                     use ethrex_common::types::Code;
                     let code_obj = Code::from_bytecode(c.new_code.clone());
@@ -454,10 +464,10 @@ impl LEVM {
             }
 
             // Detect account removal (EIP-161): post-state empty but pre-state existed
-            let post_empty = balance.is_zero() && nonce == 0 && code_hash == *EMPTY_KECCACK_HASH;
+            let post_empty = balance.is_zero() && nonce == 0 && code_hash == EMPTY_KECCACK_HASH;
             let pre_empty = prestate.balance.is_zero()
                 && prestate.nonce == 0
-                && prestate.code_hash == *EMPTY_KECCACK_HASH;
+                && prestate.code_hash == EMPTY_KECCACK_HASH;
             let removed = post_empty && !pre_empty;
 
             let balance_changed = acct_changes
@@ -515,6 +525,7 @@ impl LEVM {
     /// `max_idx` is the BAL block_access_index of the last tx whose effects
     /// should be visible. BAL indexing: 0 = system calls, 1 = tx 0, 2 = tx 1, ...
     /// For tx at index `i`, pass `max_idx = i` (diffs with index <= i = system + txs 0..i-1).
+    #[cfg(feature = "std")]
     fn seed_db_from_bal(
         db: &mut GeneralizedDatabase,
         bal: &BlockAccessList,
@@ -551,7 +562,7 @@ impl LEVM {
             let code_update = if code_pos > 0 {
                 let last = &acct_changes.code_changes[code_pos - 1];
                 if last.new_code.is_empty() {
-                    Some((*EMPTY_KECCACK_HASH, None))
+                    Some((EMPTY_KECCACK_HASH, None))
                 } else {
                     use ethrex_common::types::Code;
                     let code_obj = Code::from_bytecode(last.new_code.clone());
@@ -572,7 +583,7 @@ impl LEVM {
                 let code_hash = code_update
                     .as_ref()
                     .map(|(h, _)| *h)
-                    .unwrap_or(*EMPTY_KECCACK_HASH);
+                    .unwrap_or(EMPTY_KECCACK_HASH);
                 // NOTE: has_storage is false for newly inserted accounts. This is safe
                 // because this DB is only used for the parallel execution path (state
                 // comes from BAL, not get_state_transitions_tx). Do not reuse this DB
@@ -642,6 +653,7 @@ impl LEVM {
     /// Each tx runs independently on its own database pre-seeded with BAL
     /// intermediate state (geth-style). State for the merkleizer comes from
     /// `bal_to_account_updates`, not from tx execution.
+    #[cfg(feature = "std")]
     #[allow(clippy::too_many_arguments)]
     fn execute_block_parallel(
         block: &Block,
@@ -771,6 +783,7 @@ impl LEVM {
     /// `codes`: code cache from per-tx DB (for code change validation)
     /// `bal`: the block access list
     /// `index`: pre-built validation index
+    #[cfg(feature = "std")]
     #[allow(clippy::too_many_arguments)]
     fn validate_tx_execution(
         bal_idx: u16,
@@ -932,7 +945,7 @@ impl LEVM {
                 if seeded_pos > 0 {
                     let seeded_code = &acct.code_changes[seeded_pos - 1].new_code;
                     let seeded_hash = if seeded_code.is_empty() {
-                        *EMPTY_KECCACK_HASH
+                        EMPTY_KECCACK_HASH
                     } else {
                         ethrex_common::utils::keccak(seeded_code)
                     };
@@ -988,6 +1001,7 @@ impl LEVM {
     /// The `store` parameter should be a `CachingDatabase`-wrapped store so that
     /// parallel workers can benefit from shared caching. The same cache should
     /// be used by the sequential execution phase.
+    #[cfg(feature = "std")]
     pub fn warm_block(
         block: &Block,
         store: Arc<dyn Database>,
@@ -1052,6 +1066,7 @@ impl LEVM {
     ///   account cache AND trie layer cache nodes
     /// - Phase 2: Load all storage slots (parallel via rayon, per-slot) + contract code
     ///   (parallel via rayon, per-account) -> benefits from trie nodes cached in Phase 1
+    #[cfg(feature = "std")]
     pub fn warm_block_from_bal(
         bal: &BlockAccessList,
         store: Arc<dyn Database>,
@@ -1094,7 +1109,7 @@ impl LEVM {
                 store
                     .get_account_state(ac.address)
                     .ok()
-                    .filter(|s| s.code_hash != *EMPTY_KECCACK_HASH)
+                    .filter(|s| s.code_hash != EMPTY_KECCACK_HASH)
                     .map(|s| s.code_hash)
             })
             .collect();
@@ -1105,6 +1120,7 @@ impl LEVM {
         Ok(())
     }
 
+    #[cfg(feature = "std")]
     fn send_state_transitions_tx(
         merkleizer: &Sender<Vec<AccountUpdate>>,
         db: &mut GeneralizedDatabase,
@@ -1200,9 +1216,9 @@ impl LEVM {
         env.disable_balance_check = disable_balance_check;
         let mut vm = VM::new(env, db, tx, LevmCallTracer::disabled(), vm_type)?;
 
-        std::mem::swap(&mut vm.stack_pool, stack_pool);
+        core::mem::swap(&mut vm.stack_pool, stack_pool);
         let result = vm.execute().map_err(VMError::into);
-        std::mem::swap(&mut vm.stack_pool, stack_pool);
+        core::mem::swap(&mut vm.stack_pool, stack_pool);
         result
     }
 
@@ -1211,6 +1227,7 @@ impl LEVM {
         Ok(())
     }
 
+    #[cfg(feature = "std")]
     pub fn simulate_tx_from_generic(
         // The transaction to execute.
         tx: &GenericTransaction,
@@ -1238,6 +1255,7 @@ impl LEVM {
         Ok(db.get_state_transitions()?)
     }
 
+    #[cfg(feature = "std")]
     pub fn get_state_transitions_tx(
         db: &mut GeneralizedDatabase,
     ) -> Result<Vec<AccountUpdate>, EvmError> {
@@ -1377,6 +1395,7 @@ impl LEVM {
         }
     }
 
+    #[cfg(feature = "std")]
     pub fn create_access_list(
         mut tx: GenericTransaction,
         header: &BlockHeader,
@@ -1559,6 +1578,7 @@ pub fn extract_all_requests_levm(
 
 /// Calculating gas_price according to EIP-1559 rules
 /// See https://github.com/ethereum/go-ethereum/blob/7ee9a6e89f59cee21b5852f5f6ffa2bcfc05a25f/internal/ethapi/transaction_args.go#L430
+#[cfg(feature = "std")]
 pub fn calculate_gas_price_for_generic(tx: &GenericTransaction, basefee: u64) -> U256 {
     if tx.gas_price != 0 {
         // Legacy gas field was specified, use it
@@ -1605,6 +1625,7 @@ pub fn calculate_gas_price_for_tx(
 /// When basefee tracking is disabled  (ie. env.disable_base_fee = true; env.disable_block_gas_limit = true;)
 /// and no gas prices were specified, lower the basefee to 0 to avoid breaking EVM invariants (basefee < feecap)
 /// See https://github.com/ethereum/go-ethereum/blob/00294e9d28151122e955c7db4344f06724295ec5/core/vm/evm.go#L137
+#[cfg(feature = "std")]
 fn adjust_disabled_base_fee(env: &mut Environment) {
     if env.gas_price == U256::zero() {
         env.base_fee_per_gas = U256::zero();
@@ -1618,6 +1639,7 @@ fn adjust_disabled_base_fee(env: &mut Environment) {
 }
 
 /// When l2 fees are disabled (ie. env.gas_price = 0), set fee configs to None to avoid breaking failing fee deductions
+#[cfg(feature = "std")]
 fn adjust_disabled_l2_fees(env: &Environment, vm_type: VMType) -> VMType {
     if env.gas_price == U256::zero()
         && let VMType::L2(fee_config) = vm_type
@@ -1632,6 +1654,7 @@ fn adjust_disabled_l2_fees(env: &Environment, vm_type: VMType) -> VMType {
     vm_type
 }
 
+#[cfg(feature = "std")]
 fn env_from_generic(
     tx: &GenericTransaction,
     header: &BlockHeader,
@@ -1691,6 +1714,7 @@ fn env_from_generic(
     })
 }
 
+#[cfg(feature = "std")]
 fn vm_from_generic<'a>(
     tx: &GenericTransaction,
     env: Environment,
@@ -1810,7 +1834,7 @@ mod bal_tests {
             AccountState {
                 balance: U256::from(100),
                 nonce: 5,
-                code_hash: *EMPTY_KECCACK_HASH,
+                code_hash: EMPTY_KECCACK_HASH,
                 storage_root: H256::zero(),
             },
         );
@@ -1837,7 +1861,7 @@ mod bal_tests {
         // Last balance entry wins
         assert_eq!(info.balance, U256::from(80));
         assert_eq!(info.nonce, 6);
-        assert_eq!(info.code_hash, *EMPTY_KECCACK_HASH);
+        assert_eq!(info.code_hash, EMPTY_KECCACK_HASH);
         // Storage
         let key = ethrex_common::utils::u256_to_h256(U256::from(42));
         assert_eq!(*u.added_storage.get(&key).unwrap(), U256::from(999));
@@ -1852,7 +1876,7 @@ mod bal_tests {
             AccountState {
                 balance: U256::from(1000),
                 nonce: 0,
-                code_hash: *EMPTY_KECCACK_HASH,
+                code_hash: EMPTY_KECCACK_HASH,
                 storage_root: H256::zero(),
             },
         );
@@ -1893,7 +1917,7 @@ mod bal_tests {
             AccountState {
                 balance: U256::from(50),
                 nonce: 1,
-                code_hash: *EMPTY_KECCACK_HASH,
+                code_hash: EMPTY_KECCACK_HASH,
                 storage_root: H256::zero(),
             },
         );

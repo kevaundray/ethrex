@@ -1,16 +1,20 @@
+use alloc::{string::String, string::ToString, vec::Vec};
+
 use bytes::Bytes;
 use ethereum_types::Address;
+#[cfg(feature = "std")]
 use rkyv::{Archive, Deserialize as RDeserialize, Serialize as RSerialize};
+#[cfg(feature = "std")]
 use serde::{Deserialize, Serialize};
 
+#[cfg(feature = "std")]
 use crate::rkyv_utils::{H160Wrapper, OptionH160Wrapper};
 
-#[derive(
-    Serialize, Deserialize, RDeserialize, RSerialize, Archive, Clone, Copy, Debug, Default,
-)]
+#[derive(Clone, Copy, Debug, Default)]
+#[cfg_attr(feature = "std", derive(Serialize, Deserialize, RDeserialize, RSerialize, Archive))]
 pub struct FeeConfig {
     /// If set, the base fee is sent to this address instead of being burned.
-    #[rkyv(with=OptionH160Wrapper)]
+    #[cfg_attr(feature = "std", rkyv(with=OptionH160Wrapper))]
     pub base_fee_vault: Option<Address>,
     pub operator_fee_config: Option<OperatorFeeConfig>,
     pub l1_fee_config: Option<L1FeeConfig>,
@@ -20,32 +24,47 @@ pub struct FeeConfig {
 /// The operator fee is an additional fee on top of the base fee
 /// that is sent to the operator fee vault.
 /// This is used to pay for the cost of running the L2 network.
-#[derive(Serialize, Deserialize, RDeserialize, RSerialize, Archive, Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug)]
+#[cfg_attr(feature = "std", derive(Serialize, Deserialize, RDeserialize, RSerialize, Archive))]
 pub struct OperatorFeeConfig {
-    #[rkyv(with=H160Wrapper)]
+    #[cfg_attr(feature = "std", rkyv(with=H160Wrapper))]
     pub operator_fee_vault: Address,
     pub operator_fee_per_gas: u64,
 }
 
 /// L1 Fee is used to pay for the cost of
 /// posting data to L1 (e.g. blob data).
-#[derive(Serialize, Deserialize, RDeserialize, RSerialize, Archive, Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug)]
+#[cfg_attr(feature = "std", derive(Serialize, Deserialize, RDeserialize, RSerialize, Archive))]
 pub struct L1FeeConfig {
-    #[rkyv(with=H160Wrapper)]
+    #[cfg_attr(feature = "std", rkyv(with=H160Wrapper))]
     pub l1_fee_vault: Address,
     pub l1_fee_per_blob_gas: u64,
 }
 
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug)]
 pub enum FeeConfigError {
-    #[error("Encoding error: {0}")]
     EncodingError(String),
-    #[error("Unsupported version: {0}")]
     UnsupportedVersion(u8),
-    #[error("Invalid fee config type: {0}")]
     InvalidFeeConfigType(u8),
-    #[error("DecoderError error: {0}")]
-    DecoderError(#[from] DecoderError),
+    DecoderError(DecoderError),
+}
+
+impl core::fmt::Display for FeeConfigError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            FeeConfigError::EncodingError(s) => write!(f, "Encoding error: {s}"),
+            FeeConfigError::UnsupportedVersion(v) => write!(f, "Unsupported version: {v}"),
+            FeeConfigError::InvalidFeeConfigType(t) => write!(f, "Invalid fee config type: {t}"),
+            FeeConfigError::DecoderError(e) => write!(f, "DecoderError error: {e}"),
+        }
+    }
+}
+
+impl From<DecoderError> for FeeConfigError {
+    fn from(e: DecoderError) -> Self {
+        FeeConfigError::DecoderError(e)
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -178,12 +197,19 @@ impl FeeConfig {
     }
 }
 
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug)]
 pub enum DecoderError {
-    #[error("Decoder failed to deserialize: {0}")]
     FailedToDeserialize(String),
-    #[error("StateDiff failed to deserialize: {0}")]
     FailedToDeserializeStateDiff(String),
+}
+
+impl core::fmt::Display for DecoderError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            DecoderError::FailedToDeserialize(s) => write!(f, "Decoder failed to deserialize: {s}"),
+            DecoderError::FailedToDeserializeStateDiff(s) => write!(f, "StateDiff failed to deserialize: {s}"),
+        }
+    }
 }
 
 pub struct Decoder {

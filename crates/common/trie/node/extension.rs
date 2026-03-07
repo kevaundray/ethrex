@@ -1,3 +1,4 @@
+use alloc::{boxed::Box, vec, vec::Vec};
 use ethrex_rlp::encode::RLPEncode;
 
 use crate::ValueRLP;

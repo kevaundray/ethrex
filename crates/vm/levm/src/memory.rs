@@ -1,4 +1,5 @@
-use std::{cell::RefCell, rc::Rc};
+use alloc::{rc::Rc, vec::Vec};
+use core::cell::RefCell;
 
 use crate::{
     constants::{MEMORY_EXPANSION_QUOTIENT, WORD_SIZE_IN_BYTES_U64, WORD_SIZE_IN_BYTES_USIZE},
@@ -168,7 +169,7 @@ impl Memory {
         #[allow(clippy::indexing_slicing, clippy::arithmetic_side_effects)]
         #[allow(unsafe_code)]
         unsafe {
-            std::ptr::copy_nonoverlapping(
+            core::ptr::copy_nonoverlapping(
                 data.get_unchecked(..real_data_size).as_ptr(),
                 buffer
                     .get_unchecked_mut(real_offset..(real_offset + real_data_size))

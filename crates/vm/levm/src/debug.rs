@@ -1,3 +1,4 @@
+use alloc::vec::Vec;
 use crate::errors::InternalError;
 use ethrex_common::U256;
 
@@ -35,11 +36,14 @@ impl DebugMode {
             if !self.print_mode {
                 self.print_mode = true;
             } else {
-                if let Ok(s) = std::str::from_utf8(&self.print_buffer) {
-                    println!("PRINTED -> {s}");
-                } else {
-                    // Theoretically this shouldn't happen but I'll leave this JIC.
-                    println!("PRINTED (failed) -> {:?}", self.print_buffer);
+                #[cfg(feature = "std")]
+                {
+                    if let Ok(s) = core::str::from_utf8(&self.print_buffer) {
+                        println!("PRINTED -> {s}");
+                    } else {
+                        // Theoretically this shouldn't happen but I'll leave this JIC.
+                        println!("PRINTED (failed) -> {:?}", self.print_buffer);
+                    }
                 }
                 self.print_buffer.clear();
                 self.print_mode = false;

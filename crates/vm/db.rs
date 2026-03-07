@@ -1,3 +1,4 @@
+use alloc::boxed::Box;
 use crate::EvmError;
 use dyn_clone::DynClone;
 use ethrex_common::{

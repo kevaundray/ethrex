@@ -1,8 +1,10 @@
+use alloc::vec::Vec;
 use ethrex_common::{H256, U256};
+#[cfg(feature = "std")]
 use serde::{Deserialize, Serialize};
 
 /// Output of the L1 stateless validation program.
-#[derive(Serialize, Deserialize)]
+#[cfg_attr(feature = "std", derive(Serialize, Deserialize))]
 pub struct ProgramOutput {
     /// Initial state trie root hash.
     pub initial_state_hash: H256,

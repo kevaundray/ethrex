@@ -8,7 +8,7 @@ use crate::{
     vm::VM,
 };
 use ethrex_common::types::Fork;
-use std::cell::OnceCell;
+use core::cell::OnceCell;
 use strum::EnumString;
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy, PartialOrd, EnumString, Hash)]

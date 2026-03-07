@@ -9,8 +9,9 @@ use crate::{
 use bytes::Bytes;
 use ethrex_common::types::block_access_list::BlockAccessListCheckpoint;
 use ethrex_common::{Address, H256, U256, types::Code};
-use std::{
-    collections::HashMap,
+use alloc::boxed::Box;
+use crate::sync_compat::HashMap;
+use core::{
     fmt,
     hash::{Hash, Hasher},
     hint::assert_unchecked,
@@ -90,7 +91,7 @@ impl Stack {
         // `self.offset` is known to be within `STACK_LIMIT`.
         #[expect(unsafe_code, reason = "next_offset == self.offset - 1 >= 0")]
         unsafe {
-            std::ptr::copy_nonoverlapping(
+            core::ptr::copy_nonoverlapping(
                 value.0.as_ptr(),
                 self.values.get_unchecked_mut(next_offset).0.as_mut_ptr(),
                 U64_PER_U256,
@@ -187,7 +188,7 @@ impl Stack {
 
         #[expect(unsafe_code, reason = "index < size, offset-1 >= 0")]
         unsafe {
-            std::ptr::copy_nonoverlapping(
+            core::ptr::copy_nonoverlapping(
                 self.values.get_unchecked_mut(index).0.as_mut_ptr(),
                 self.values.get_unchecked_mut(self.offset).0.as_mut_ptr(),
                 U64_PER_U256,
@@ -422,7 +423,7 @@ impl<'a> VM<'a> {
         self.call_frames.push(new_call_frame);
         #[allow(unsafe_code, reason = "just pushed, so the vec is not empty")]
         unsafe {
-            std::mem::swap(
+            core::mem::swap(
                 &mut self.current_call_frame,
                 self.call_frames.last_mut().unwrap_unchecked(),
             );
@@ -433,7 +434,7 @@ impl<'a> VM<'a> {
     pub fn pop_call_frame(&mut self) -> Result<CallFrame, InternalError> {
         let mut new = self.call_frames.pop().ok_or(InternalError::CallFrame)?;
 
-        std::mem::swap(&mut new, &mut self.current_call_frame);
+        core::mem::swap(&mut new, &mut self.current_call_frame);
 
         Ok(new)
     }

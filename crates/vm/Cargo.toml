@@ -8,31 +8,48 @@ license.workspace = true
 
 [dependencies]
 ethrex-common = { workspace = true, default-features = false }
-ethrex-crypto.workspace = true
+ethrex-crypto = { workspace = true, default-features = false }
 ethrex-levm = { path = "./levm", default-features = false }
-ethrex-trie.workspace = true
-ethrex-rlp.workspace = true
+ethrex-trie = { workspace = true, default-features = false }
+ethrex-rlp = { workspace = true, default-features = false }
 
-derive_more = { version = "1.0.0", features = ["full"] }
-bytes.workspace = true
+bytes = { workspace = true }
 thiserror.workspace = true
-lazy_static.workspace = true
-tracing.workspace = true
-serde.workspace = true
-rkyv.workspace = true
-rayon.workspace = true
+lazy_static = { workspace = true, optional = true }
+tracing = { workspace = true, optional = true }
+serde = { workspace = true }
+rkyv = { workspace = true, optional = true }
+rayon = { workspace = true, optional = true }
 rustc-hash.workspace = true
+hashbrown = "0.15"
 
-bincode = "1"
+bincode = { version = "1", optional = true }
 dyn-clone = "1.0"
 
-ethereum-types.workspace = true
+ethereum-types = { workspace = true, optional = true }
 
 [lib]
 path = "./lib.rs"
 
 [features]
-default = ["secp256k1"]
+default = ["std", "secp256k1"]
+std = [
+    "dep:lazy_static",
+    "dep:tracing",
+    "dep:rkyv",
+    "dep:rayon",
+    "dep:bincode",
+    "dep:ethereum-types",
+    "ethrex-common/std",
+    "ethrex-levm/std",
+    "ethrex-trie/std",
+    "ethrex-rlp/std",
+    "ethrex-crypto/std",
+    "bytes/serde",
+    "serde/std",
+    "thiserror/std",
+    "hashbrown/rayon",
+]
 
 secp256k1 = ["ethrex-levm/secp256k1", "ethrex-common/secp256k1"]
 c-kzg = ["ethrex-levm/c-kzg", "ethrex-common/c-kzg"]

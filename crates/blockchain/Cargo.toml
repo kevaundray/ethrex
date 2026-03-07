@@ -9,17 +9,17 @@ license.workspace = true
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-ethrex-rlp.workspace = true
+ethrex-rlp = { workspace = true, features = ["std"] }
 ethrex-common = { workspace = true, default-features = false }
-ethrex-crypto.workspace = true
+ethrex-crypto = { workspace = true, features = ["std"] }
 ethrex-storage.workspace = true
-ethrex-trie.workspace = true
-ethrex-vm.workspace = true
+ethrex-trie = { workspace = true, features = ["std"] }
+ethrex-vm = { workspace = true, features = ["std"] }
 ethrex-metrics = { path = "./metrics", default-features = false }
 
-thiserror.workspace = true
+thiserror = { workspace = true, features = ["std"] }
 tracing.workspace = true
-bytes.workspace = true
+bytes = { workspace = true, features = ["serde"] }
 hex.workspace = true
 rustc-hash.workspace = true
 tokio = { workspace = true, features = ["time", "rt", "sync", "macros"] }

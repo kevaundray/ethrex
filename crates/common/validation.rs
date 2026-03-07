@@ -3,6 +3,8 @@
 //! This module provides pure validation functions that can be used without
 //! storage dependencies, making them suitable for use in zkVM guest programs.
 
+use alloc::{format, vec::Vec};
+
 use crate::constants::{GAS_PER_BLOB, MAX_RLP_BLOCK_SIZE, POST_OSAKA_GAS_LIMIT_CAP};
 use crate::errors::InvalidBlockError;
 use crate::types::requests::{EncodedRequests, Requests, compute_requests_hash};

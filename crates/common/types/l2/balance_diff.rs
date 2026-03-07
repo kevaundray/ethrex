@@ -1,9 +1,13 @@
+use alloc::vec::Vec;
+
 use bytes::BufMut;
 use ethereum_types::{Address, H256, U256};
 use ethrex_rlp::{decode::RLPDecode, encode::RLPEncode, error::RLPDecodeError};
+#[cfg(feature = "std")]
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default)]
+#[cfg_attr(feature = "std", derive(Serialize, Deserialize))]
 pub struct AssetDiff {
     pub token_l1: Address,
     pub token_src_l2: Address,
@@ -12,7 +16,8 @@ pub struct AssetDiff {
 }
 
 /// Represents the amount of balance to transfer to the bridge contract for a specific chain.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default)]
+#[cfg_attr(feature = "std", derive(Serialize, Deserialize))]
 pub struct BalanceDiff {
     pub chain_id: U256,
     pub value: U256,

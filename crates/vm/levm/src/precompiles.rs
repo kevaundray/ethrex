@@ -9,7 +9,7 @@ use bytes::{Buf, Bytes};
 use ethrex_common::H160;
 use ethrex_common::utils::u256_from_big_endian_const;
 use ethrex_common::{
-    Address, H256, U256, serde_utils::bool, types::Fork, types::Fork::*,
+    Address, H256, U256, types::Fork, types::Fork::*,
     utils::u256_from_big_endian,
 };
 use ethrex_crypto::{blake2f::blake2b_f, kzg::verify_kzg_proof};
@@ -31,11 +31,12 @@ use p256::{
 };
 use rustc_hash::FxHashMap;
 use sha2::Digest;
-use std::borrow::Cow;
-use std::ops::Mul;
-use std::sync::RwLock;
+use alloc::borrow::Cow;
+use alloc::{vec, vec::Vec};
+use core::ops::Mul;
+use crate::sync_compat::RwLock;
 
-use crate::constants::{P256_A, P256_B, P256_N};
+use crate::constants::{P256_A, p256_b, P256_N};
 use crate::gas_cost::{MODEXP_STATIC_COST, P256_VERIFY_COST};
 use crate::vm::VMType;
 use crate::{
@@ -1263,16 +1264,16 @@ pub fn blake2f(calldata: &Bytes, gas_remaining: &mut u64, _fork: Fork) -> Result
 
     let mut h = [0; 8];
 
-    h.copy_from_slice(&std::array::from_fn::<u64, 8, _>(|_| calldata.get_u64_le()));
+    h.copy_from_slice(&core::array::from_fn::<u64, 8, _>(|_| calldata.get_u64_le()));
 
     let mut m = [0; 16];
 
-    m.copy_from_slice(&std::array::from_fn::<u64, 16, _>(|_| {
+    m.copy_from_slice(&core::array::from_fn::<u64, 16, _>(|_| {
         calldata.get_u64_le()
     }));
 
     let mut t = [0; 2];
-    t.copy_from_slice(&std::array::from_fn::<u64, 2, _>(|_| calldata.get_u64_le()));
+    t.copy_from_slice(&core::array::from_fn::<u64, 2, _>(|_| calldata.get_u64_le()));
 
     let f = calldata.get_u8();
     if f != 0 && f != 1 {
@@ -1423,7 +1424,7 @@ pub fn p_256_verify(
 
         // Curve equation: `y² = x³ + ax + b`
         let a_x = P256_A.multiply(&x);
-        if y.square() != x.pow_vartime(&[3u64]).add(&a_x).add(&P256_B) {
+        if y.square() != x.pow_vartime(&[3u64]).add(&a_x).add(p256_b()) {
             return Ok(Bytes::new());
         }
     }

@@ -17,18 +17,25 @@ use crate::{
     tracing::LevmCallTracer,
 };
 use bytes::Bytes;
+use crate::tracing::CallType;
 use ethrex_common::{
     Address, H160, H256, U256,
-    tracing::CallType,
-    types::{AccessListEntry, Code, Fork, Log, Transaction, fee_config::FeeConfig},
+    types::{Code, Fork, Log, Transaction, fee_config::FeeConfig},
 };
-use rustc_hash::{FxHashMap, FxHashSet};
-use std::{
+#[cfg(feature = "std")]
+use ethrex_common::types::AccessListEntry;
+use alloc::{boxed::Box, collections::BTreeSet, rc::Rc, vec::Vec};
+#[cfg(feature = "std")]
+use alloc::collections::BTreeMap;
+use crate::sync_compat::HashMap;
+use core::{
     cell::{OnceCell, RefCell},
-    collections::{BTreeMap, BTreeSet, HashMap},
     mem,
-    rc::Rc,
 };
+
+use rustc_hash::FxBuildHasher;
+type FxHashMap<K, V> = hashbrown::HashMap<K, V, FxBuildHasher>;
+type FxHashSet<V> = hashbrown::HashSet<V, FxBuildHasher>;
 
 /// Storage mapping from slot key to value.
 pub type Storage = HashMap<U256, H256>;
@@ -144,7 +151,7 @@ impl Substate {
     pub fn iter_selfdestruct(&self) -> impl Iterator<Item = &Address> {
         struct Iter<'a> {
             parent: Option<&'a Substate>,
-            iter: std::collections::hash_set::Iter<'a, Address>,
+            iter: hashbrown::hash_set::Iter<'a, Address>,
         }
 
         impl<'a> Iterator for Iter<'a> {
@@ -197,6 +204,7 @@ impl Substate {
     }
 
     /// Build an access list from all accessed storage slots.
+    #[cfg(feature = "std")]
     pub fn make_access_list(&self) -> Vec<AccessListEntry> {
         let mut entries = BTreeMap::<Address, BTreeSet<H256>>::new();
 
@@ -681,7 +689,7 @@ impl<'a> VM<'a> {
             gas_used: ctx_result.gas_used,
             gas_spent: ctx_result.gas_spent,
             gas_refunded: self.substate.refunded_gas,
-            output: std::mem::take(&mut ctx_result.output),
+            output: core::mem::take(&mut ctx_result.output),
             logs,
         };
 

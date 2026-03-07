@@ -13,7 +13,7 @@
 //!   - `BLOBHASH`
 //!   - `BLOBBASEFEE`
 
-use std::mem;
+use core::mem;
 
 use crate::{
     constants::LAST_AVAILABLE_BLOCK_LIMIT,

@@ -1,3 +1,4 @@
+use alloc::{format, vec::Vec};
 use super::{
     decode::{RLPDecode, decode_rlp_item, get_item_with_prefix},
     encode::{RLPEncode, encode_length},
@@ -124,7 +125,7 @@ impl<'a> Decoder<'a> {
 }
 
 fn field_decode_error<T>(field_name: &str, err: RLPDecodeError) -> RLPDecodeError {
-    let typ = std::any::type_name::<T>();
+    let typ = core::any::type_name::<T>();
     let err_msg = format!("Error decoding field '{field_name}' of type {typ}: {err}");
     RLPDecodeError::Custom(err_msg)
 }

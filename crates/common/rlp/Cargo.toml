@@ -9,11 +9,15 @@ license.workspace = true
 [dependencies]
 tinyvec = "1.6.0"
 thiserror.workspace = true
-bytes.workspace = true
+bytes = { workspace = true }
 hex.workspace = true
-lazy_static.workspace = true
+lazy_static = { workspace = true, optional = true }
 ethereum-types.workspace = true
-snap.workspace = true
+snap = { workspace = true, optional = true }
+
+[features]
+default = ["std"]
+std = ["dep:snap", "dep:lazy_static", "ethereum-types/std", "thiserror/std"]
 
 [lib]
 path = "./rlp.rs"

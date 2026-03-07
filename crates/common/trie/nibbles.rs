@@ -1,4 +1,6 @@
-use std::{cmp, mem};
+use alloc::vec;
+use alloc::vec::Vec;
+use core::{cmp, mem};
 
 use ethrex_rlp::{
     decode::RLPDecode,
@@ -49,8 +51,8 @@ impl Ord for Nibbles {
     }
 }
 
-impl std::hash::Hash for Nibbles {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+impl core::hash::Hash for Nibbles {
+    fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
         self.data.hash(state);
     }
 }

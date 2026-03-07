@@ -1,3 +1,4 @@
+use alloc::string::ToString;
 use ethrex_common::U256 as CoreU256;
 use ethrex_common::constants::EMPTY_KECCACK_HASH;
 use ethrex_common::types::{AccountState, Code, CodeMetadata};
@@ -7,10 +8,12 @@ use ethrex_levm::db::Database as LevmDatabase;
 use crate::VmDatabase;
 use crate::db::DynVmDatabase;
 use ethrex_levm::errors::DatabaseError;
+#[cfg(feature = "std")]
 use std::collections::HashMap;
-use std::result::Result;
+#[cfg(feature = "std")]
 use std::sync::{Arc, Mutex};
 
+#[cfg(feature = "std")]
 #[derive(Clone)]
 pub struct DatabaseLogger {
     pub block_hashes_accessed: Arc<Mutex<HashMap<u64, CoreH256>>>,
@@ -19,6 +22,7 @@ pub struct DatabaseLogger {
     pub store: Arc<dyn LevmDatabase>,
 }
 
+#[cfg(feature = "std")]
 impl DatabaseLogger {
     pub fn new(store: Arc<dyn LevmDatabase>) -> Self {
         Self {
@@ -30,6 +34,7 @@ impl DatabaseLogger {
     }
 }
 
+#[cfg(feature = "std")]
 impl LevmDatabase for DatabaseLogger {
     fn get_account_state(&self, address: CoreAddress) -> Result<AccountState, DatabaseError> {
         self.state_accessed
@@ -69,7 +74,7 @@ impl LevmDatabase for DatabaseLogger {
     }
 
     fn get_account_code(&self, code_hash: CoreH256) -> Result<Code, DatabaseError> {
-        if code_hash != *EMPTY_KECCACK_HASH {
+        if code_hash != EMPTY_KECCACK_HASH {
             let mut code_accessed = self
                 .code_accessed
                 .lock()

@@ -62,10 +62,10 @@ ethrex-p2p = { path = "./crates/networking/p2p" }
 ethrex-rpc = { path = "./crates/networking/rpc" }
 ethrex-storage = { path = "./crates/storage" }
 ethrex-vm = { path = "./crates/vm", default-features = false }
-ethrex-levm = { path = "./crates/vm/levm" }
-ethrex-trie = { path = "./crates/common/trie" }
-ethrex-rlp = { path = "./crates/common/rlp" }
-ethrex-crypto = { path = "./crates/common/crypto" }
+ethrex-levm = { path = "./crates/vm/levm", default-features = false }
+ethrex-trie = { path = "./crates/common/trie", default-features = false }
+ethrex-rlp = { path = "./crates/common/rlp", default-features = false }
+ethrex-crypto = { path = "./crates/common/crypto", default-features = false }
 ethrex-metrics = { path = "./crates/blockchain/metrics" }
 ethrex-l2 = { path = "./crates/l2" }
 ethrex-l2-common = { path = "./crates/l2/common" }
@@ -82,24 +82,24 @@ tracing = { version = "0.1", features = ["log"] }
 tracing-subscriber = { version = "0.3.0", features = ["env-filter"] }
 
 async-trait = "0.1.88"
-ethereum-types = { version = "0.15.1", features = ["serialize"] }
-serde = { version = "1.0.203", features = ["derive", "rc"] }
-serde_with = "3.11.0"
+ethereum-types = { version = "0.15.1", default-features = false, features = ["serialize"] }
+serde = { version = "1.0.203", default-features = false, features = ["derive", "rc", "alloc"] }
+serde_with = { version = "3.11.0", default-features = false, features = ["macros"] }
 serde_json = "1.0.117"
-bytes = { version = "1.6.0", features = ["serde"] }
+bytes = { version = "1.6.0", default-features = false }
 tokio = { version = "1.41.1", default-features = false }
-thiserror = "2.0.9"
-hex = "0.4.3"
+thiserror = { version = "2.0.9", default-features = false }
+hex = { version = "0.4.3", default-features = false, features = ["alloc"] }
 hex-literal = "0.4.1"
-crc32fast = "1.4.2"
+crc32fast = { version = "1.4.2", default-features = false }
 lazy_static = "1.5.0"
-sha2 = "0.10.9"
-sha3 = "0.10.8"
+sha2 = { version = "0.10.9", default-features = false }
+sha3 = { version = "0.10.8", default-features = false }
 tokio-util = { version = "0.7.15", features = ["rt"] }
 jsonwebtoken = "9.3.0"
 rand = "0.8.5"
 reqwest = { version = "0.12.7", features = ["socks", "json"] }
-rustc-hash = "2.1.1"
+rustc-hash = { version = "2.1.1", default-features = false }
 snap = "1.1.1"
 secp256k1 = { version = "0.30.0", default-features = false, features = [
   "global-context",
@@ -122,12 +122,12 @@ lambdaworks-crypto = "0.13.0"
 tui-logger = { version = "0.17.3", features = ["tracing-support"] }
 crossbeam = "0.8.4"
 rayon = "1.10.0"
-rkyv = { version = "0.8.10", features = ["std", "unaligned"] }
+rkyv = { version = "0.8.10", default-features = false, features = ["alloc", "unaligned", "bytecheck"] }
 tempfile = "3.8"
 uuid = { version = "1.18.1", features = ["v4"] }
 tower-http = { version = "0.6.2", features = ["cors"] }
 indexmap = { version = "2.11.4" }
-k256 = "0.13.4"
+k256 = { version = "0.13.4", default-features = false, features = ["ecdsa", "alloc"] }
 anyhow = "1.0.86"
 
 rocksdb = { version = "0.24.0", default-features = false, features = [

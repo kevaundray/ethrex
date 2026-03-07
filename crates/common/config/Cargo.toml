@@ -8,9 +8,9 @@ license.workspace = true
 
 [dependencies]
 ethrex-p2p.workspace = true
-ethrex-common.workspace = true
+ethrex-common = { workspace = true, features = ["std"] }
 serde_json.workspace = true
-serde.workspace = true
+serde = { workspace = true, features = ["std"] }
 hex.workspace = true
 
 [lib]
