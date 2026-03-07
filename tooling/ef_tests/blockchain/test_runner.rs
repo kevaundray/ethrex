@@ -2,7 +2,10 @@ use std::{collections::HashMap, path::Path};
 
 use crate::{
     fork::Fork,
-    types::{BlockChainExpectedException, BlockExpectedException, BlockWithRLP, TestUnit},
+    types::{
+        BlockChainExpectedException, BlockExpectedException, BlockWithRLP,
+        FixtureExecutionWitness, TestUnit,
+    },
 };
 use ethrex_blockchain::{
     Blockchain, BlockchainOptions,
@@ -486,6 +489,34 @@ async fn re_run_stateless(
     // At this point witness is guaranteed to be Ok
     let execution_witness = witness.unwrap();
 
+    // Verify SSZ-encoded statelessInputBytes witness matches JSON executionWitness
+    //
+    // TODO: this should also check that the fixture witness is equal
+    // to the generated witness.
+    // Then the fixture witness can be ran on the guest program
+    if let (Some(input_bytes), Some(fixture_witness)) = (
+        test.blocks
+            .first()
+            .and_then(|bf| bf.block())
+            .and_then(|b| b.stateless_input_bytes.as_ref()),
+        test.blocks
+            .first()
+            .and_then(|bf| bf.block())
+            .and_then(|b| b.execution_witness.as_ref()),
+    ) {
+        verify_ssz_witness(input_bytes, fixture_witness, test_key)?;
+    }
+
+    // Verify SSZ-encoded statelessOutputBytes can be deserialized
+    if let Some(output_bytes) = test
+        .blocks
+        .first()
+        .and_then(|bf| bf.block())
+        .and_then(|b| b.stateless_output_bytes.as_ref())
+    {
+        deserialize_ssz_output(output_bytes, test_key)?;
+    }
+
     let program_input = ProgramInput::new(blocks, execution_witness);
 
     let execute_result = match backend_type {
@@ -505,3 +536,98 @@ async fn re_run_stateless(
     }
     Ok(())
 }
+
+/// Decode SSZ-encoded statelessInputBytes and verify its witness matches
+/// the JSON executionWitness field.
+fn verify_ssz_witness(
+    input_bytes: &[u8],
+    fixture_witness: &FixtureExecutionWitness,
+    test_key: &str,
+) -> Result<(), String> {
+    use crate::ssz_types::SszStatelessInput;
+    use ssz_rs::Deserialize as _;
+
+    let ssz_input = SszStatelessInput::deserialize(input_bytes)
+        .map_err(|e| format!("Test {test_key}: failed to decode statelessInputBytes: {e}"))?;
+
+    let ssz_witness = &ssz_input.witness;
+
+    // Verify state node count matches
+    if ssz_witness.state.len() != fixture_witness.state.len() {
+        return Err(format!(
+            "Test {test_key}: witness state node count mismatch: SSZ has {}, JSON has {}",
+            ssz_witness.state.len(),
+            fixture_witness.state.len()
+        ));
+    }
+
+    // Verify each state node matches
+    for (i, (ssz_node, json_node)) in ssz_witness
+        .state
+        .iter()
+        .zip(fixture_witness.state.iter())
+        .enumerate()
+    {
+        if ssz_node.as_ref() != json_node.as_ref() {
+            return Err(format!(
+                "Test {test_key}: witness state node {i} mismatch"
+            ));
+        }
+    }
+
+    // Verify each code matches
+    if ssz_witness.codes.len() != fixture_witness.codes.len() {
+        return Err(format!(
+            "Test {test_key}: witness codes count mismatch: SSZ has {}, JSON has {}",
+            ssz_witness.codes.len(),
+            fixture_witness.codes.len()
+        ));
+    }
+    for (i, (ssz_code, json_code)) in ssz_witness
+        .codes
+        .iter()
+        .zip(fixture_witness.codes.iter())
+        .enumerate()
+    {
+        if ssz_code.as_ref() != json_code.as_ref() {
+            return Err(format!(
+                "Test {test_key}: witness code {i} mismatch"
+            ));
+        }
+    }
+
+    // Verify each header matches
+    if ssz_witness.headers.len() != fixture_witness.headers.len() {
+        return Err(format!(
+            "Test {test_key}: witness headers count mismatch: SSZ has {}, JSON has {}",
+            ssz_witness.headers.len(),
+            fixture_witness.headers.len()
+        ));
+    }
+    for (i, (ssz_header, json_header)) in ssz_witness
+        .headers
+        .iter()
+        .zip(fixture_witness.headers.iter())
+        .enumerate()
+    {
+        if ssz_header.as_ref() != json_header.as_ref() {
+            return Err(format!(
+                "Test {test_key}: witness header {i} mismatch"
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+/// Deserialize SSZ-encoded statelessOutputBytes to verify it's well-formed.
+fn deserialize_ssz_output(output_bytes: &[u8], test_key: &str) -> Result<(), String> {
+    use crate::ssz_types::SszStatelessValidationResult;
+    use ssz_rs::Deserialize as _;
+
+    let _output = SszStatelessValidationResult::deserialize(output_bytes)
+        .map_err(|e| format!("Test {test_key}: failed to decode statelessOutputBytes: {e}"))?;
+
+    Ok(())
+}
+
