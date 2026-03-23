@@ -1,0 +1,582 @@
+<!DOCTYPE HTML>
+<html lang="en" class="light sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>Hive tests - Ethrex</title>
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="../../../favicon.svg">
+        <link rel="shortcut icon" href="../../../favicon.png">
+        <link rel="stylesheet" href="../../../css/variables.css">
+        <link rel="stylesheet" href="../../../css/general.css">
+        <link rel="stylesheet" href="../../../css/chrome.css">
+        <link rel="stylesheet" href="../../../css/print.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="../../../FontAwesome/css/font-awesome.css">
+        <link rel="stylesheet" href="../../../fonts/fonts.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="highlight-css" href="../../../highlight.css">
+        <link rel="stylesheet" id="tomorrow-night-css" href="../../../tomorrow-night.css">
+        <link rel="stylesheet" id="ayu-highlight-css" href="../../../ayu-highlight.css">
+
+        <!-- Custom theme stylesheets -->
+
+
+        <!-- Provide site root and default themes to javascript -->
+        <script>
+            const path_to_root = "../../../";
+            const default_light_theme = "light";
+            const default_dark_theme = "navy";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="../../../toc.js"></script>
+    </head>
+    <body>
+    <div id="mdbook-help-container">
+        <div id="mdbook-help-popup">
+            <h2 class="mdbook-help-title">Keyboard shortcuts</h2>
+            <div>
+                <p>Press <kbd>←</kbd> or <kbd>→</kbd> to navigate between chapters</p>
+                <p>Press <kbd>S</kbd> or <kbd>/</kbd> to search in the book</p>
+                <p>Press <kbd>?</kbd> to show this help</p>
+                <p>Press <kbd>Esc</kbd> to hide this help</p>
+            </div>
+        </div>
+    </div>
+    <div id="body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                let theme = localStorage.getItem('mdbook-theme');
+                let sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            const default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? default_dark_theme : default_light_theme;
+            let theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('light')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            let sidebar = null;
+            const sidebar_toggle = document.getElementById("sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+            }
+            sidebar_toggle.checked = sidebar === 'visible';
+            html.classList.remove('sidebar-visible');
+            html.classList.add("sidebar-" + sidebar);
+        </script>
+
+        <nav id="sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="../../../toc.html"></iframe>
+            </noscript>
+            <div id="sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <div id="menu-bar-hover-placeholder"></div>
+                <div id="menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="sidebar-toggle" class="icon-button" for="sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="sidebar">
+                            <i class="fa fa-bars"></i>
+                        </label>
+                        <button id="theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="theme-list">
+                            <i class="fa fa-paint-brush"></i>
+                        </button>
+                        <ul id="theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="default_theme">Auto</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="ayu">Ayu</button></li>
+                        </ul>
+                        <button id="search-toggle" class="icon-button" type="button" title="Search (`/`)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="/ s" aria-controls="searchbar">
+                            <i class="fa fa-search"></i>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">Ethrex</h1>
+
+                    <div class="right-buttons">
+                        <a href="../../../print.html" title="Print this book" aria-label="Print this book">
+                            <i id="print-button" class="fa fa-print"></i>
+                        </a>
+                        <a href="https://github.com/lambdaclass/ethrex" title="Git repository" aria-label="Git repository">
+                            <i id="git-repository-button" class="fa fa-github"></i>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="search-wrapper" class="hidden">
+                    <form id="searchbar-outer" class="searchbar-outer">
+                        <input type="search" id="searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="searchresults-outer" aria-describedby="searchresults-header">
+                    </form>
+                    <div id="searchresults-outer" class="searchresults-outer hidden">
+                        <div id="searchresults-header" class="searchresults-header"></div>
+                        <ul id="searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="content" class="content">
+                    <main>
+                        <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.4/dist/katex.min.css">
+<style>
+.mdbook-alerts {
+  padding: 8px 16px;
+  margin-bottom: 16px;
+  border-left: 0.25em solid var(--mdbook-alerts-color);
+}
+
+.mdbook-alerts > *:first-child {
+  margin-top: 0;
+}
+
+.mdbook-alerts > *:last-child {
+  margin-bottom: 0;
+}
+
+.mdbook-alerts-title {
+  display: flex;
+  font-weight: 600;
+  align-items: center;
+  line-height: 1;
+  color: var(--mdbook-alerts-color);
+  text-transform: capitalize;
+}
+
+.mdbook-alerts-icon {
+  display: inline-block;
+  width: 1em;
+  height: 1em;
+  margin-right: 0.2em;
+  background-color: currentColor;
+  -webkit-mask: no-repeat center / 100%;
+  mask: no-repeat center / 100%;
+  -webkit-mask-image: var(--mdbook-alerts-icon);
+  mask-image: var(--mdbook-alerts-icon);
+}
+
+.mdbook-alerts-note {
+  --mdbook-alerts-color: rgb(9, 105, 218);
+  /* https://icon-sets.iconify.design/material-symbols/info-outline-rounded/ */
+  --mdbook-alerts-icon: url('data:image/svg+xml,%3Csvg xmlns="http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg" width="24" height="24" viewBox="0 0 24 24"%3E%3Cpath fill="currentColor" d="M12 17q.425 0 .713-.288T13 16v-4q0-.425-.288-.712T12 11q-.425 0-.712.288T11 12v4q0 .425.288.713T12 17m0-8q.425 0 .713-.288T13 8q0-.425-.288-.712T12 7q-.425 0-.712.288T11 8q0 .425.288.713T12 9m0 13q-2.075 0-3.9-.788t-3.175-2.137q-1.35-1.35-2.137-3.175T2 12q0-2.075.788-3.9t2.137-3.175q1.35-1.35 3.175-2.137T12 2q2.075 0 3.9.788t3.175 2.137q1.35 1.35 2.138 3.175T22 12q0 2.075-.788 3.9t-2.137 3.175q-1.35 1.35-3.175 2.138T12 22m0-2q3.35 0 5.675-2.325T20 12q0-3.35-2.325-5.675T12 4Q8.65 4 6.325 6.325T4 12q0 3.35 2.325 5.675T12 20m0-8"%2F%3E%3C%2Fsvg%3E');
+}
+
+.mdbook-alerts-tip {
+  --mdbook-alerts-color: rgb(26, 127, 55);
+  /* https://icon-sets.iconify.design/material-symbols/lightbulb-outline-rounded/ */
+  --mdbook-alerts-icon: url('data:image/svg+xml,%3Csvg xmlns="http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg" width="24" height="24" viewBox="0 0 24 24"%3E%3Cpath fill="currentColor" d="M12 22q-.825 0-1.412-.587T10 20h4q0 .825-.587 1.413T12 22m-3-3q-.425 0-.712-.288T8 18q0-.425.288-.712T9 17h6q.425 0 .713.288T16 18q0 .425-.288.713T15 19zm-.75-3q-1.725-1.025-2.738-2.75T4.5 9.5q0-3.125 2.188-5.312T12 2q3.125 0 5.313 2.188T19.5 9.5q0 2.025-1.012 3.75T15.75 16zm.6-2h6.3q1.125-.8 1.738-1.975T17.5 9.5q0-2.3-1.6-3.9T12 4Q9.7 4 8.1 5.6T6.5 9.5q0 1.35.613 2.525T8.85 14M12 14"%2F%3E%3C%2Fsvg%3E');
+}
+
+.mdbook-alerts-important {
+  --mdbook-alerts-color: rgb(130, 80, 223);
+  /* https://icon-sets.iconify.design/material-symbols/chat-info-outline-rounded/ */
+  --mdbook-alerts-icon: url('data:image/svg+xml,%3Csvg xmlns="http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg" width="24" height="24" viewBox="0 0 24 24"%3E%3Cpath fill="currentColor" d="M12 7q.425 0 .713-.288T13 6q0-.425-.288-.712T12 5q-.425 0-.712.288T11 6q0 .425.288.713T12 7m0 8q.425 0 .713-.288T13 14v-4q0-.425-.288-.712T12 9q-.425 0-.712.288T11 10v4q0 .425.288.713T12 15m-6 3l-2.3 2.3q-.475.475-1.088.213T2 19.575V4q0-.825.588-1.412T4 2h16q.825 0 1.413.588T22 4v12q0 .825-.587 1.413T20 18zm-.85-2H20V4H4v13.125zM4 16V4z"%2F%3E%3C%2Fsvg%3E');
+}
+
+.mdbook-alerts-warning {
+  --mdbook-alerts-color: rgb(154, 103, 0);
+  /* https://icon-sets.iconify.design/material-symbols/warning-outline-rounded/ */
+  --mdbook-alerts-icon: url('data:image/svg+xml,%3Csvg xmlns="http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg" width="24" height="24" viewBox="0 0 24 24"%3E%3Cpath fill="currentColor" d="M2.725 21q-.275 0-.5-.137t-.35-.363q-.125-.225-.137-.488t.137-.512l9.25-16q.15-.25.388-.375T12 3q.25 0 .488.125t.387.375l9.25 16q.15.25.138.513t-.138.487q-.125.225-.35.363t-.5.137zm1.725-2h15.1L12 6zM12 18q.425 0 .713-.288T13 17q0-.425-.288-.712T12 16q-.425 0-.712.288T11 17q0 .425.288.713T12 18m0-3q.425 0 .713-.288T13 14v-3q0-.425-.288-.712T12 10q-.425 0-.712.288T11 11v3q0 .425.288.713T12 15m0-2.5"%2F%3E%3C%2Fsvg%3E');
+}
+
+.mdbook-alerts-caution {
+  --mdbook-alerts-color: rgb(207, 34, 46);
+  /* https://icon-sets.iconify.design/material-symbols/brightness-alert-outline-rounded/ */
+  --mdbook-alerts-icon: url('data:image/svg+xml,%3Csvg xmlns="http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg" width="24" height="24" viewBox="0 0 24 24"%3E%3Cpath fill="currentColor" d="M12 17q.425 0 .713-.288T13 16q0-.425-.288-.712T12 15q-.425 0-.712.288T11 16q0 .425.288.713T12 17m0-4q.425 0 .713-.288T13 12V8q0-.425-.288-.712T12 7q-.425 0-.712.288T11 8v4q0 .425.288.713T12 13m-3.35 7H6q-.825 0-1.412-.587T4 18v-2.65L2.075 13.4q-.275-.3-.425-.662T1.5 12q0-.375.15-.737t.425-.663L4 8.65V6q0-.825.588-1.412T6 4h2.65l1.95-1.925q.3-.275.663-.425T12 1.5q.375 0 .738.15t.662.425L15.35 4H18q.825 0 1.413.588T20 6v2.65l1.925 1.95q.275.3.425.663t.15.737q0 .375-.15.738t-.425.662L20 15.35V18q0 .825-.587 1.413T18 20h-2.65l-1.95 1.925q-.3.275-.662.425T12 22.5q-.375 0-.737-.15t-.663-.425zm.85-2l2.5 2.5l2.5-2.5H18v-3.5l2.5-2.5L18 9.5V6h-3.5L12 3.5L9.5 6H6v3.5L3.5 12L6 14.5V18zm2.5-6"%2F%3E%3C%2Fsvg%3E');
+}
+
+</style>
+<h1 id="hive-tests"><a class="header" href="#hive-tests">Hive Tests</a></h1>
+<p>End-to-End tests with Hive. Hive is a system which sends RPC commands to Ethereum clients and validates their responses. You can read more about it <a href="https://github.com/ethereum/hive/blob/master/docs/overview.md">here</a>.</p>
+<h2 id="overview"><a class="header" href="#overview">Overview</a></h2>
+<p>This project uses three key repositories for Hive testing:</p>
+<ol>
+<li><strong><a href="https://github.com/ethereum/hive">ethereum/hive</a></strong> - The main Hive testing framework
+<ul>
+<li>Current commit: <code>0921fb7833e3de180eacdc9f26de6e51dcab0dba</code></li>
+</ul>
+</li>
+<li><strong><a href="https://github.com/ethereum/execution-spec-tests">ethereum/execution-spec-tests</a></strong> - Test fixtures and vectors
+<ul>
+<li>Current version: <code>bal@v5.5.1</code> (Amsterdam fork support)</li>
+</ul>
+</li>
+<li><strong><a href="https://github.com/ethereum/execution-specs">ethereum/execution-specs</a></strong> - Fork specifications
+<ul>
+<li>Current branch: <code>forks/amsterdam</code></li>
+</ul>
+</li>
+</ol>
+<h2 id="prerequisites"><a class="header" href="#prerequisites">Prerequisites</a></h2>
+<h3 id="required-tools"><a class="header" href="#required-tools">Required Tools</a></h3>
+<ol>
+<li>
+<p><strong>Docker</strong> - Required for running containerized clients</p>
+<pre><code class="language-bash"># Install Docker following the official guide for your OS
+# Verify installation
+docker --version
+</code></pre>
+</li>
+<li>
+<p><strong>Go</strong> - Required to build the Hive framework</p>
+<p>Using asdf:</p>
+<pre><code class="language-bash">asdf plugin add golang https://github.com/asdf-community/asdf-golang.git
+</code></pre>
+<p>Uncomment the golang line in the <code>.tool-versions</code> file:</p>
+<pre><code class="language-text">rust 1.90.0
+golang 1.23.2
+</code></pre>
+<p>Then install:</p>
+<pre><code class="language-bash">asdf install
+</code></pre>
+<p>If you need to set GOROOT, follow <a href="https://github.com/asdf-community/asdf-golang?tab=readme-ov-file#goroot">these instructions</a>.</p>
+</li>
+<li>
+<p><strong>Rust</strong> - Required to build the ethrex client</p>
+<pre><code class="language-bash"># Already configured in .tool-versions
+asdf install rust
+</code></pre>
+</li>
+</ol>
+<h3 id="build-the-ethrex-docker-image"><a class="header" href="#build-the-ethrex-docker-image">Build the ethrex Docker Image</a></h3>
+<p>Before running Hive tests, you need to build the ethrex Docker image:</p>
+<pre><code class="language-bash">make build-image
+</code></pre>
+<h2 id="running-hive-tests"><a class="header" href="#running-hive-tests">Running Hive Tests</a></h2>
+<h3 id="1-setup-hive-framework"><a class="header" href="#1-setup-hive-framework">1. Setup Hive Framework</a></h3>
+<p>The first time you run tests, Hive will be automatically cloned and built. You can also set it up manually:</p>
+<pre><code class="language-bash">make setup-hive
+</code></pre>
+<p>This will:</p>
+<ul>
+<li>Clone the <code>ethereum/hive</code> repository at the configured commit</li>
+<li>Build the Hive binary using Go</li>
+<li>Place it in the <code>./hive</code> directory</li>
+</ul>
+<h3 id="2-basic-test-execution"><a class="header" href="#2-basic-test-execution">2. Basic Test Execution</a></h3>
+<h4 id="run-specific-simulation"><a class="header" href="#run-specific-simulation">Run Specific Simulation</a></h4>
+<p>Hive tests are organized by "simulations". To run a specific simulation:</p>
+<pre><code class="language-bash">make run-hive SIMULATION=&lt;simulation-name&gt; TEST_PATTERN="&lt;pattern&gt;"
+</code></pre>
+<p><strong>Available Simulations:</strong></p>
+<ul>
+<li><code>ethereum/rpc-compat</code> - RPC API compatibility tests</li>
+<li><code>devp2p</code> - P2P networking tests (Discovery V4, Eth, Snap)</li>
+<li><code>ethereum/engine</code> - Engine API tests (Paris, Auth, Cancun, Withdrawals)</li>
+<li><code>ethereum/sync</code> - Node synchronization tests</li>
+<li><code>ethereum/eels/consume-engine</code> - EVM Execution Layer tests (Engine format)</li>
+<li><code>ethereum/eels/consume-rlp</code> - EVM Execution Layer tests (RLP format)</li>
+<li><code>ethereum/eels/execute-blobs</code> - Blob execution tests</li>
+</ul>
+<h4 id="example-rpc-compatibility-tests"><a class="header" href="#example-rpc-compatibility-tests">Example: RPC Compatibility Tests</a></h4>
+<p>This is an example of a Hive simulation called <code>ethereum/rpc-compat</code>, which will specifically run chain id and transaction by hash rpc tests:</p>
+<pre><code class="language-bash">make run-hive SIMULATION=ethereum/rpc-compat TEST_PATTERN="/eth_chainId|eth_getTransactionByHash"
+</code></pre>
+<p>Run all RPC tests:</p>
+<pre><code class="language-bash">make run-hive SIMULATION=ethereum/rpc-compat TEST_PATTERN="*"
+</code></pre>
+<h4 id="run-all-simulations"><a class="header" href="#run-all-simulations">Run All Simulations</a></h4>
+<p>To run every available simulation:</p>
+<pre><code class="language-bash">make run-hive-all
+</code></pre>
+<h3 id="3-debug-mode"><a class="header" href="#3-debug-mode">3. Debug Mode</a></h3>
+<p>For detailed debug output including Docker container logs:</p>
+<pre><code class="language-bash">make run-hive-debug SIMULATION=ethereum/rpc-compat TEST_PATTERN="*"
+</code></pre>
+<p>Debug mode sets:</p>
+<ul>
+<li><code>--sim.loglevel 4</code> (maximum verbosity)</li>
+<li><code>--docker.output</code> (shows Docker container output)</li>
+</ul>
+<h3 id="4-amsterdam-fork-tests-eels"><a class="header" href="#4-amsterdam-fork-tests-eels">4. Amsterdam Fork Tests (EELS)</a></h3>
+<p>To test Amsterdam fork compatibility using the Ethereum Execution Layer Specification tests:</p>
+<h4 id="run-engine-format-tests"><a class="header" href="#run-engine-format-tests">Run Engine Format Tests</a></h4>
+<p>Tests all forks including Amsterdam:</p>
+<pre><code class="language-bash">make run-hive-eels-engine
+</code></pre>
+<p>Test specific forks:</p>
+<pre><code class="language-bash">make run-hive-eels EELS_SIM=ethereum/eels/consume-engine TEST_PATTERN_EELS=".*fork_Amsterdam.*"
+</code></pre>
+<p>Test multiple forks:</p>
+<pre><code class="language-bash">make run-hive-eels EELS_SIM=ethereum/eels/consume-engine TEST_PATTERN_EELS=".*fork_Prague.*|.*fork_Amsterdam.*"
+</code></pre>
+<h4 id="run-rlp-format-tests"><a class="header" href="#run-rlp-format-tests">Run RLP Format Tests</a></h4>
+<pre><code class="language-bash">make run-hive-eels-rlp
+</code></pre>
+<p>Or test specific forks:</p>
+<pre><code class="language-bash">make run-hive-eels EELS_SIM=ethereum/eels/consume-rlp TEST_PATTERN_EELS=".*fork_Amsterdam.*"
+</code></pre>
+<h4 id="run-blob-execution-tests"><a class="header" href="#run-blob-execution-tests">Run Blob Execution Tests</a></h4>
+<pre><code class="language-bash">make run-hive-eels-blobs
+</code></pre>
+<h3 id="5-customizing-test-execution"><a class="header" href="#5-customizing-test-execution">5. Customizing Test Execution</a></h3>
+<h4 id="adjust-parallelism"><a class="header" href="#adjust-parallelism">Adjust Parallelism</a></h4>
+<p>Control how many tests run in parallel (default: 16):</p>
+<pre><code class="language-bash">make run-hive SIMULATION=ethereum/rpc-compat SIM_PARALLELISM=8
+</code></pre>
+<h4 id="adjust-log-level"><a class="header" href="#adjust-log-level">Adjust Log Level</a></h4>
+<p>Set log verbosity from 1 (least verbose) to 4 (most verbose):</p>
+<pre><code class="language-bash">make run-hive SIMULATION=ethereum/rpc-compat SIM_LOG_LEVEL=1
+</code></pre>
+<h4 id="test-pattern-examples"><a class="header" href="#test-pattern-examples">Test Pattern Examples</a></h4>
+<p>Match specific test names:</p>
+<pre><code class="language-bash">TEST_PATTERN="/eth_chainId"                    # Single test
+TEST_PATTERN="/eth_chainId|eth_blockNumber"    # Multiple tests
+TEST_PATTERN="/eth_get.*"                       # Regex pattern
+TEST_PATTERN="*"                                # All tests
+</code></pre>
+<p>For fork-specific EELS tests:</p>
+<pre><code class="language-bash">TEST_PATTERN_EELS=".*fork_Amsterdam.*"                                    # Amsterdam only
+TEST_PATTERN_EELS=".*fork_Paris.*|.*fork_Shanghai.*|.*fork_Cancun.*"     # Multiple forks
+</code></pre>
+<h2 id="viewing-results"><a class="header" href="#viewing-results">Viewing Results</a></h2>
+<h3 id="hive-web-interface"><a class="header" href="#hive-web-interface">Hive Web Interface</a></h3>
+<p>After running tests, view results in a web interface:</p>
+<pre><code class="language-bash">make view-hive
+</code></pre>
+<p>This starts a local server at <code>http://127.0.0.1:8080</code> showing:</p>
+<ul>
+<li>Test pass/fail status</li>
+<li>Detailed logs for each test</li>
+<li>Client information and errors</li>
+</ul>
+<p>The web interface is automatically opened after <code>make run-hive</code> completes.</p>
+<h3 id="command-line-results"><a class="header" href="#command-line-results">Command Line Results</a></h3>
+<p>Results are also available in the terminal output and in:</p>
+<pre><code>./hive/workspace/logs/
+</code></pre>
+<p>Log files include:</p>
+<ul>
+<li><code>*.json</code> - Test results in JSON format</li>
+<li><code>*.log</code> - Detailed execution logs</li>
+<li>Client-specific logs for debugging failures</li>
+</ul>
+<h3 id="generate-hive-report"><a class="header" href="#generate-hive-report">Generate Hive Report</a></h3>
+<p>To generate a formatted report from test results:</p>
+<pre><code class="language-bash">cargo run --manifest-path tooling/Cargo.toml -p hive_report
+</code></pre>
+<p>This reads all JSON files in <code>hive/workspace/logs/</code> and produces:</p>
+<ul>
+<li>Summary by category (Engine, P2P, RPC, Sync, EVM)</li>
+<li>Pass/fail statistics per simulation</li>
+<li>Fork-specific results (Paris, Shanghai, Cancun, Prague, Amsterdam)</li>
+</ul>
+<h2 id="cleaning-up"><a class="header" href="#cleaning-up">Cleaning Up</a></h2>
+<p>Remove Hive logs and workspace:</p>
+<pre><code class="language-bash">make clean-hive-logs
+</code></pre>
+<p>Remove the entire Hive directory to force a fresh clone:</p>
+<pre><code class="language-bash">rm -rf ./hive
+</code></pre>
+<h2 id="repository-configuration"><a class="header" href="#repository-configuration">Repository Configuration</a></h2>
+<p>The project pins specific versions of the three repositories for Amsterdam fork support:</p>
+<h3 id="makefile-configuration"><a class="header" href="#makefile-configuration">Makefile Configuration</a></h3>
+<pre><code class="language-makefile"># ethereum/hive branch
+HIVE_BRANCH ?= master
+</code></pre>
+<h3 id="workflow-configuration-githubworkflowsdaily_hive_reportyaml"><a class="header" href="#workflow-configuration-githubworkflowsdaily_hive_reportyaml">Workflow Configuration (.github/workflows/daily_hive_report.yaml)</a></h3>
+<p>The workflow uses fork-specific fixtures to ensure comprehensive test coverage:</p>
+<pre><code class="language-yaml"># Amsterdam tests use fixtures_bal (includes BAL-specific tests)
+if [[ "$SIM_LIMIT" == *"fork_Amsterdam"* ]]; then
+  FLAGS+=" --sim.buildarg fixtures=https://github.com/ethereum/execution-spec-tests/releases/download/bal@v5.5.1/fixtures_bal.tar.gz"
+  FLAGS+=" --sim.buildarg branch=devnets/bal/3"
+else
+  # Other forks use fixtures_develop (comprehensive coverage including static tests)
+  FLAGS+=" --sim.buildarg fixtures=https://github.com/ethereum/execution-spec-tests/releases/download/v5.3.0/fixtures_develop.tar.gz"
+  FLAGS+=" --sim.buildarg branch=forks/osaka"
+fi
+</code></pre>
+<h3 id="fixtures-url-files"><a class="header" href="#fixtures-url-files">Fixtures URL Files</a></h3>
+<ul>
+<li><code>tooling/ef_tests/blockchain/.fixtures_url</code> — Used by <code>run-hive-eels</code> Makefile target (non-Amsterdam forks)</li>
+<li><code>tooling/ef_tests/blockchain/.fixtures_url_amsterdam</code> — Amsterdam-specific fixtures with BAL support</li>
+</ul>
+<p>Contents:</p>
+<pre><code># .fixtures_url
+https://github.com/ethereum/execution-spec-tests/releases/download/v5.3.0/fixtures_develop.tar.gz
+
+# .fixtures_url_amsterdam
+https://github.com/ethereum/execution-spec-tests/releases/download/bal@v5.5.1/fixtures_bal.tar.gz
+</code></pre>
+<p><strong>Note</strong>: The CI workflow uses <code>fixtures_bal</code> with <code>branch=devnets/bal/3</code> for Amsterdam tests, and <code>fixtures_develop</code> with <code>branch=forks/osaka</code> for other forks.</p>
+<h2 id="updating-repository-versions"><a class="header" href="#updating-repository-versions">Updating Repository Versions</a></h2>
+<p>To update to a different fork or newer versions:</p>
+<ol>
+<li>
+<p><strong>Update Hive commit</strong> in <code>Makefile</code>:</p>
+<pre><code class="language-makefile">HIVE_BRANCH ?= &lt;new-commit-hash&gt;
+</code></pre>
+</li>
+<li>
+<p><strong>Update execution-spec-tests versions</strong> in <code>.github/workflows/daily_hive_report.yaml</code>:</p>
+<p>For Amsterdam tests (fixtures_bal):</p>
+<pre><code class="language-yaml">FLAGS+=" --sim.buildarg fixtures=https://github.com/ethereum/execution-spec-tests/releases/download/bal@&lt;version&gt;/fixtures_bal.tar.gz"
+FLAGS+=" --sim.buildarg branch=devnets/bal/3"
+</code></pre>
+<p>For other forks (fixtures_develop):</p>
+<pre><code class="language-yaml">FLAGS+=" --sim.buildarg fixtures=https://github.com/ethereum/execution-spec-tests/releases/download/v&lt;version&gt;/fixtures_develop.tar.gz"
+FLAGS+=" --sim.buildarg branch=forks/&lt;fork-name&gt;"
+</code></pre>
+</li>
+<li>
+<p><strong>Update fixtures URL files</strong>:</p>
+<pre><code class="language-bash"># For Amsterdam fixtures
+echo "https://github.com/ethereum/execution-spec-tests/releases/download/bal@&lt;version&gt;/fixtures_bal.tar.gz" &gt; tooling/ef_tests/blockchain/.fixtures_url_amsterdam
+# For other forks
+echo "https://github.com/ethereum/execution-spec-tests/releases/download/v&lt;version&gt;/fixtures_develop.tar.gz" &gt; tooling/ef_tests/blockchain/.fixtures_url
+</code></pre>
+</li>
+<li>
+<p><strong>Update fork references</strong> in code if switching to a different fork:</p>
+<ul>
+<li><code>.github/workflows/daily_hive_report.yaml</code> - Test names and patterns</li>
+<li><code>tooling/hive_report/src/main.rs</code> - Fork ranking and result processing</li>
+</ul>
+</li>
+</ol>
+<h2 id="troubleshooting"><a class="header" href="#troubleshooting">Troubleshooting</a></h2>
+<h3 id="docker-permission-errors"><a class="header" href="#docker-permission-errors">Docker Permission Errors</a></h3>
+<p>If you encounter Docker permission errors:</p>
+<pre><code class="language-bash">sudo usermod -aG docker $USER
+newgrp docker
+</code></pre>
+<h3 id="hive-build-failures"><a class="header" href="#hive-build-failures">Hive Build Failures</a></h3>
+<p>If Go build fails:</p>
+<pre><code class="language-bash"># Clean and rebuild
+rm -rf ./hive
+make setup-hive
+</code></pre>
+<h3 id="missing-test-fixtures"><a class="header" href="#missing-test-fixtures">Missing Test Fixtures</a></h3>
+<p>If EELS tests fail due to missing fixtures:</p>
+<pre><code class="language-bash"># Verify fixtures URL is accessible
+curl -I $(cat tooling/ef_tests/blockchain/.fixtures_url)
+
+# Re-download fixtures (they're downloaded automatically during test execution)
+</code></pre>
+<h3 id="client-container-failures"><a class="header" href="#client-container-failures">Client Container Failures</a></h3>
+<p>If the ethrex client container fails to start:</p>
+<pre><code class="language-bash"># Rebuild the Docker image
+make build-image
+
+# Check Docker images
+docker images | grep ethrex
+</code></pre>
+<h2 id="cicd-integration"><a class="header" href="#cicd-integration">CI/CD Integration</a></h2>
+<p>The project runs Hive tests automatically via GitHub Actions:</p>
+<ul>
+<li><strong>Daily runs</strong>: <code>.github/workflows/daily_hive_report.yaml</code> - Comprehensive test coverage</li>
+<li><strong>PR validation</strong>: <code>.github/workflows/pr-main_l1.yaml</code> - Subset of critical tests</li>
+</ul>
+<p>Results are posted to Slack and available in GitHub Actions artifacts.</p>
+<h2 id="additional-resources"><a class="header" href="#additional-resources">Additional Resources</a></h2>
+<ul>
+<li><a href="https://github.com/ethereum/hive/blob/master/docs/overview.md">Hive Documentation</a></li>
+<li><a href="https://github.com/ethereum/execution-spec-tests">Execution Spec Tests</a></li>
+<li><a href="https://github.com/ethereum/execution-apis">Ethereum Execution APIs</a></li>
+<li><a href="https://eips.ethereum.org/EIPS/eip-7928">Amsterdam Fork (Glamsterdam) Details</a></li>
+</ul>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="../../../developers/l1/testing/ef-tests.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <i class="fa fa-angle-left"></i>
+                            </a>
+
+                            <a rel="next prefetch" href="../../../developers/l1/testing/assertoor.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <i class="fa fa-angle-right"></i>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="../../../developers/l1/testing/ef-tests.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <i class="fa fa-angle-left"></i>
+                    </a>
+
+                    <a rel="next prefetch" href="../../../developers/l1/testing/assertoor.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <i class="fa fa-angle-right"></i>
+                    </a>
+            </nav>
+
+        </div>
+
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="../../../elasticlunr.min.js"></script>
+        <script src="../../../mark.min.js"></script>
+        <script src="../../../searcher.js"></script>
+
+        <script src="../../../clipboard.min.js"></script>
+        <script src="../../../highlight.js"></script>
+        <script src="../../../book.js"></script>
+
+        <!-- Custom JS scripts -->
+        <script src="../../../mermaid.min.js"></script>
+        <script src="../../../mermaid-init.js"></script>
+
+
+    </div>
+    </body>
+</html>
