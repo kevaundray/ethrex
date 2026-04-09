@@ -304,6 +304,18 @@ pub struct DecodedRLPBlock {
     rlp_decoded: Block,
 }
 
+/// Execution witness as it appears in EEST blockchain test fixtures.
+#[derive(Debug, PartialEq, Eq, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct FixtureExecutionWitness {
+    #[serde(deserialize_with = "ethrex_common::serde_utils::bytes::vec::deserialize")]
+    pub state: Vec<Bytes>,
+    #[serde(deserialize_with = "ethrex_common::serde_utils::bytes::vec::deserialize")]
+    pub codes: Vec<Bytes>,
+    #[serde(deserialize_with = "ethrex_common::serde_utils::bytes::vec::deserialize")]
+    pub headers: Vec<Bytes>,
+}
+
 #[derive(Debug, PartialEq, Eq, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct Block {
@@ -313,6 +325,15 @@ pub struct Block {
     #[serde(default)]
     pub uncle_headers: Vec<Header>,
     pub withdrawals: Option<Vec<Withdrawal>>,
+    pub execution_witness: Option<FixtureExecutionWitness>,
+    #[serde(default, deserialize_with = "optional_hex_bytes")]
+    pub stateless_input_bytes: Option<Bytes>,
+    #[serde(default, deserialize_with = "optional_hex_bytes")]
+    pub stateless_output_bytes: Option<Bytes>,
+}
+
+fn optional_hex_bytes<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<Bytes>, D::Error> {
+    ethrex_common::serde_utils::bytes::deserialize(d).map(Some)
 }
 
 impl BlockWithRLP {
