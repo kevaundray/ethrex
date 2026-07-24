@@ -3,3 +3,11 @@
 //! to its contents with BLAKE3 hashes up to a single root.
 
 pub mod bits;
+pub mod node;
+pub mod rebuild;
+
+pub use node::EMPTY_TRIE_ROOT;
+
+/// Longest accepted key, in bytes. Bounds branch-prefix bit counts
+/// below the two-byte limit of `encode_bit_prefix`.
+pub const MAX_KEY_LENGTH: usize = 8192;

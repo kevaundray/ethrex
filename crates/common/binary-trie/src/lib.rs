@@ -7,4 +7,7 @@
 //! Reference: `ethereum/execution-specs`, `src/ethereum/binary_trie/`.
 
 pub mod embedding;
+pub mod error;
 pub mod trie;
+
+pub use error::BinaryTrieError;
