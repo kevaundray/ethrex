@@ -1,12 +1,31 @@
 //! Conformance tests against vectors generated from the EELS
 //! reference implementation (see tests/vectors/dump_vectors.py).
 
+use std::collections::BTreeMap;
+
+use ethereum_types::{H160, U256};
+use ethrex_binary_trie::embedding;
 use ethrex_binary_trie::trie::rebuild::{Entries, rebuild_root};
 use serde::Deserialize;
 
 #[derive(Deserialize)]
 struct Fixture {
     trie_roots: Vec<TrieCase>,
+    embedding: EmbeddingVectors,
+}
+
+#[derive(Deserialize)]
+struct EmbeddingVectors {
+    address20: String,
+    address32: String,
+    basic_data_key: String,
+    code_hash_key: String,
+    header_sub_index_255_key: String,
+    /// Keyed by decimal slot number, including values past `u64`.
+    storage_slot_keys: BTreeMap<String, String>,
+    /// Keyed by decimal chunk id.
+    code_chunk_keys: BTreeMap<String, String>,
+    code_chunk_content_hash: String,
 }
 
 #[derive(Deserialize)]
@@ -48,6 +67,49 @@ fn rebuild_matches_spec_roots() {
             unhex(&case.root).as_slice(),
             "trie case {}",
             case.name
+        );
+    }
+}
+
+#[test]
+fn embedding_keys_match_spec() {
+    let vectors = load().embedding;
+
+    let address20 = H160::from_slice(&unhex(&vectors.address20));
+    let address32 = embedding::address20_to_address32(address20);
+    assert_eq!(address32.as_slice(), unhex(&vectors.address32).as_slice());
+
+    assert_eq!(
+        embedding::get_tree_key_for_basic_data(&address32),
+        unhex(&vectors.basic_data_key)
+    );
+    assert_eq!(
+        embedding::get_tree_key_for_code_hash(&address32),
+        unhex(&vectors.code_hash_key)
+    );
+    assert_eq!(
+        embedding::get_tree_key_for_header(&address32, 255),
+        unhex(&vectors.header_sub_index_255_key)
+    );
+
+    for (slot, expected) in &vectors.storage_slot_keys {
+        let storage_key = U256::from_dec_str(slot).expect("fixture decimal slot");
+        assert_eq!(
+            embedding::get_tree_key_for_storage_slot(&address32, storage_key),
+            unhex(expected),
+            "storage slot {slot}"
+        );
+    }
+
+    let code_hash: [u8; 32] = unhex(&vectors.code_chunk_content_hash)
+        .try_into()
+        .expect("fixture code hash");
+    for (chunk_id, expected) in &vectors.code_chunk_keys {
+        let chunk_id: u64 = chunk_id.parse().expect("fixture decimal chunk id");
+        assert_eq!(
+            embedding::get_tree_key_for_code_chunk(&address32, &code_hash, chunk_id),
+            unhex(expected),
+            "code chunk {chunk_id}"
         );
     }
 }
