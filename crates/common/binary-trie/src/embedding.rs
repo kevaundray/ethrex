@@ -114,6 +114,11 @@ fn get_tree_key(zone: u8, tree_position: &[u8], sub_index: u8) -> Key {
 /// not one key: it is up to [`STEM_SUBTREE_WIDTH`] separate leaves
 /// sharing that stem, and `sub_index` selects which one; basic data,
 /// code hash, an early storage slot, or an early code chunk.
+///
+/// Callers must pass `sub_index < STEM_SUBTREE_WIDTH`: only a
+/// `debug_assert` guards the bound, so in release builds an
+/// out-of-range value silently truncates to its low byte and yields
+/// another leaf's key.
 pub fn get_tree_key_for_header(address: &Address32, sub_index: u64) -> Key {
     debug_assert!(sub_index < STEM_SUBTREE_WIDTH);
     let key = get_tree_key(ACCOUNT_ZONE, key_hash(address).as_bytes(), sub_index as u8);

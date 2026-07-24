@@ -110,6 +110,11 @@ fn embedding_keys_match_spec() {
         unhex(&vectors.header_sub_index_255_key)
     );
 
+    assert_eq!(
+        vectors.storage_slot_keys.len(),
+        9,
+        "fixture storage slot key count"
+    );
     for (slot, expected) in &vectors.storage_slot_keys {
         let storage_key = U256::from_dec_str(slot).expect("fixture decimal slot");
         assert_eq!(
@@ -122,6 +127,11 @@ fn embedding_keys_match_spec() {
     let code_hash: [u8; 32] = unhex(&vectors.code_chunk_content_hash)
         .try_into()
         .expect("fixture code hash");
+    assert_eq!(
+        vectors.code_chunk_keys.len(),
+        7,
+        "fixture code chunk key count"
+    );
     for (chunk_id, expected) in &vectors.code_chunk_keys {
         let chunk_id: u64 = chunk_id.parse().expect("fixture decimal chunk id");
         assert_eq!(
