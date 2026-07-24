@@ -15,6 +15,7 @@ pub fn bytes_to_bits(data: &[u8]) -> Vec<u8> {
 /// prefixes differing only in trailing zero bits would pack to the
 /// same bytes and two different trees could share a root.
 pub fn encode_bit_prefix(prefix: &[u8]) -> Vec<u8> {
+    debug_assert!(prefix.iter().all(|b| *b <= 1), "prefix bits must be 0 or 1");
     assert!(
         prefix.len() < 1 << 16,
         "prefix bit count must fit in two bytes"

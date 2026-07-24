@@ -31,6 +31,12 @@ fn load() -> Fixture {
 }
 
 #[test]
+fn fixture_has_expected_case_count() {
+    // Guards against a silently empty or renamed fixture section.
+    assert_eq!(load().trie_roots.len(), 9);
+}
+
+#[test]
 fn rebuild_matches_spec_roots() {
     for case in load().trie_roots {
         let mut entries = Entries::new();
