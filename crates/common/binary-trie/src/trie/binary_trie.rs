@@ -11,7 +11,10 @@
 //! Deliberate simplifications, deferred to the storage-integration
 //! plan: no hash caching (every `root()` call rehashes the whole
 //! tree), no deletion, and no `TrieDB` backing (all nodes live in
-//! memory).
+//! memory). Recursion depth is bounded by the key length in bits, so
+//! max-length keys could theoretically overflow the stack; embedding
+//! keys are at most 66 bytes, and the storage-integration rework is
+//! the place to go iterative if ever needed.
 
 use ethereum_types::H256;
 
@@ -27,6 +30,8 @@ enum Node {
         value: [u8; 32],
     },
     Branch {
+        /// Bits (0/1 per element) shared by every key below, relative
+        /// to the parent's split point.
         prefix: Vec<u8>,
         left: Box<Node>,
         right: Box<Node>,
@@ -46,7 +51,16 @@ impl BinaryTrie {
     }
 
     /// Insert `key` with `value`, overwriting any existing value for
-    /// the same key. On error the trie is left unchanged.
+    /// the same key.
+    ///
+    /// # Errors
+    ///
+    /// The trie is left unchanged on every error:
+    /// - [`BinaryTrieError::EmptyKey`] if `key` is empty.
+    /// - [`BinaryTrieError::KeyTooLong`] if `key` exceeds
+    ///   [`MAX_KEY_LENGTH`] bytes.
+    /// - [`BinaryTrieError::PrefixViolation`] if inserting `key` would
+    ///   make some key a bit-prefix of another.
     pub fn insert(&mut self, key: Vec<u8>, value: [u8; 32]) -> Result<(), BinaryTrieError> {
         if key.is_empty() {
             return Err(BinaryTrieError::EmptyKey);
@@ -166,36 +180,34 @@ impl BinaryTrie {
                         ));
                     }
                     return if bits[split] == 0 {
-                        match Self::insert_at(*left, bits, split + 1, key, value) {
-                            Ok(child) => Ok(Node::Branch {
-                                prefix,
-                                left: Box::new(child),
-                                right,
-                            }),
-                            Err((child, e)) => Err((
-                                Node::Branch {
-                                    prefix,
-                                    left: Box::new(child),
-                                    right,
-                                },
-                                e,
-                            )),
+                        let (child, outcome) =
+                            match Self::insert_at(*left, bits, split + 1, key, value) {
+                                Ok(c) => (c, Ok(())),
+                                Err((c, e)) => (c, Err(e)),
+                            };
+                        let node = Node::Branch {
+                            prefix,
+                            left: Box::new(child),
+                            right,
+                        };
+                        match outcome {
+                            Ok(()) => Ok(node),
+                            Err(e) => Err((node, e)),
                         }
                     } else {
-                        match Self::insert_at(*right, bits, split + 1, key, value) {
-                            Ok(child) => Ok(Node::Branch {
-                                prefix,
-                                left,
-                                right: Box::new(child),
-                            }),
-                            Err((child, e)) => Err((
-                                Node::Branch {
-                                    prefix,
-                                    left,
-                                    right: Box::new(child),
-                                },
-                                e,
-                            )),
+                        let (child, outcome) =
+                            match Self::insert_at(*right, bits, split + 1, key, value) {
+                                Ok(c) => (c, Ok(())),
+                                Err((c, e)) => (c, Err(e)),
+                            };
+                        let node = Node::Branch {
+                            prefix,
+                            left,
+                            right: Box::new(child),
+                        };
+                        match outcome {
+                            Ok(()) => Ok(node),
+                            Err(e) => Err((node, e)),
                         }
                     };
                 }
@@ -343,6 +355,30 @@ mod tests {
         let _ = trie.insert(vec![0xaa, 0xbb, 0xcc], [2; 32]);
         assert_eq!(trie.root(), root_before);
         assert_eq!(trie.get(&[0xaa, 0xbb]), Some([1; 32]));
+    }
+
+    #[test]
+    fn failed_insert_below_branch_leaves_trie_unchanged() {
+        // Two keys sharing their first 9 bits force a root branch with
+        // a long prefix, so both Branch-arm error sites are reachable.
+        let mut trie = BinaryTrie::new();
+        trie.insert(vec![0xaa, 0xbb], [1; 32]).unwrap();
+        trie.insert(vec![0xaa, 0xcc], [2; 32]).unwrap();
+        let root_before = trie.root();
+        // Runs out of bits inside the branch's prefix walk.
+        assert_eq!(
+            trie.insert(vec![0xaa], [3; 32]),
+            Err(BinaryTrieError::PrefixViolation)
+        );
+        // Fails at the leaf below the branch, exercising error
+        // propagation and branch reconstruction on the way back up.
+        assert_eq!(
+            trie.insert(vec![0xaa, 0xbb, 0xcc], [3; 32]),
+            Err(BinaryTrieError::PrefixViolation)
+        );
+        assert_eq!(trie.root(), root_before);
+        assert_eq!(trie.get(&[0xaa, 0xbb]), Some([1; 32]));
+        assert_eq!(trie.get(&[0xaa, 0xcc]), Some([2; 32]));
     }
 
     #[test]
