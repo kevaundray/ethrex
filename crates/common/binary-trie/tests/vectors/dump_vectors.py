@@ -3,16 +3,21 @@ Dump EIP-8297 binary trie + embedding test vectors from the EELS
 reference implementation (execution-specs, projects/binary-trie) as
 JSON, for use as fixtures in ethrex's Rust implementation.
 
-Run from the execution-specs checkout:
+Run from the root of the execution-specs checkout:
     uv run python dump_vectors.py > binary_trie_vectors.json
+
+The script records the checkout's HEAD commit in the fixture's
+`source_commit` field (via `git rev-parse HEAD` in the CWD), pinning
+the exact spec revision the vectors were generated from.
 """
 
 import json
 import random
+import subprocess
 import sys
 
 from ethereum_types.bytes import Bytes, Bytes20, Bytes32
-from ethereum_types.numeric import U8, U32, U64, U256, Uint
+from ethereum_types.numeric import U32, U64, U256, Uint
 
 from ethereum.binary_trie.trie import BinaryTrie, root, trie_set
 from ethereum.binary_trie.embedding import (
@@ -32,13 +37,16 @@ def hx(b: bytes) -> str:
     return "0x" + bytes(b).hex()
 
 
-def trie_root_case(name: str, entries: dict) -> dict:
+def trie_root_case(name: str, entries: list) -> dict:
+    """`entries` is an ordered list of (key, value) pairs, applied in
+    order with trie_set; duplicates are preserved in the serialized
+    output so consumers can replay overwrites."""
     t = BinaryTrie()
-    for k, v in entries.items():
+    for k, v in entries:
         trie_set(t, Bytes(k), Bytes32(v))
     return {
         "name": name,
-        "entries": [{"key": hx(k), "value": hx(v)} for k, v in entries.items()],
+        "entries": [{"key": hx(k), "value": hx(v)} for k, v in entries],
         "root": hx(root(t)),
     }
 
@@ -48,47 +56,50 @@ V2 = bytes.fromhex("02" * 32)
 V3 = bytes.fromhex("03" * 32)
 
 trie_cases = [
-    trie_root_case("empty", {}),
-    trie_root_case("single_leaf", {b"\x00" * 34: V1}),
-    trie_root_case("single_leaf_one_byte_key", {b"\xab": V1}),
+    trie_root_case("empty", []),
+    trie_root_case("single_leaf", [(b"\x00" * 34, V1)]),
+    trie_root_case("single_leaf_one_byte_key", [(b"\xab", V1)]),
     trie_root_case(
         "two_leaves_diverge_first_bit",
-        {b"\x00" + b"\x11" * 33: V1, b"\x80" + b"\x11" * 33: V2},
+        [(b"\x00" + b"\x11" * 33, V1), (b"\x80" + b"\x11" * 33, V2)],
     ),
     trie_root_case(
         "two_leaves_diverge_last_bit",
-        {b"\x22" * 33 + b"\x00": V1, b"\x22" * 33 + b"\x01": V2},
+        [(b"\x22" * 33 + b"\x00", V1), (b"\x22" * 33 + b"\x01", V2)],
     ),
     trie_root_case(
         "three_leaves_shared_prefix",
-        {
-            b"\xf0" + b"\x00" * 33: V1,
-            b"\xf1" + b"\x00" * 33: V2,
-            b"\x0f" + b"\x00" * 33: V3,
-        },
+        [
+            (b"\xf0" + b"\x00" * 33, V1),
+            (b"\xf1" + b"\x00" * 33, V2),
+            (b"\x0f" + b"\x00" * 33, V3),
+        ],
     ),
     trie_root_case(
         "mixed_key_lengths_34_and_66",
-        {
-            b"\x00" + b"\xaa" * 32 + b"\x05": V1,
-            b"\xff" + b"\xbb" * 64 + b"\x07": V2,
-        },
+        [
+            (b"\x00" + b"\xaa" * 32 + b"\x05", V1),
+            (b"\xff" + b"\xbb" * 64 + b"\x07", V2),
+        ],
     ),
     trie_root_case(
         "overwrite_takes_last_value",
-        # dict literal keeps last write, mirroring trie_set overwrite
-        {b"\x42" * 34: V2},
+        # same key written twice: the second trie_set overwrites
+        [(b"\x42" * 34, V1), (b"\x42" * 34, V2)],
     ),
 ]
 
-# Deterministic pseudo-random case: 50 distinct 34-byte keys.
+# Deterministic pseudo-random case: 50 distinct 34-byte keys, listed in
+# generation (insertion) order.
 rng = random.Random(8297)
 rand_entries = {}
 while len(rand_entries) < 50:
     k = bytes(rng.randrange(256) for _ in range(34))
     v = bytes(rng.randrange(256) for _ in range(32))
     rand_entries[k] = v
-trie_cases.append(trie_root_case("random_50_keys_seed_8297", rand_entries))
+trie_cases.append(
+    trie_root_case("random_50_keys_seed_8297", list(rand_entries.items()))
+)
 
 ADDRESS20 = bytes.fromhex("00112233445566778899aabbccddeeff00112233")
 ADDR32 = address20_to_address32(Bytes20(ADDRESS20))
@@ -172,6 +183,9 @@ basic_data_cases = [
 json.dump(
     {
         "source": "ethereum/execution-specs projects/binary-trie",
+        "source_commit": subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], text=True
+        ).strip(),
         "trie_roots": trie_cases,
         "embedding": embedding_cases,
         "chunkify_code": chunkify_cases,
