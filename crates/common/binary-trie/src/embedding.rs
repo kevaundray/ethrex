@@ -21,6 +21,7 @@
 
 use ethereum_types::{H160, H256, U256};
 
+use crate::error::BinaryTrieError;
 use crate::trie::node::blake3_hash;
 
 /// Sub-index of the account header leaf packing version, code size,
@@ -213,6 +214,89 @@ pub fn get_tree_key_for_code_chunk(
     key
 }
 
+/// Opcode value one below `PUSH1`, so `PUSH_OFFSET + n` is the opcode
+/// pushing `n` bytes.
+pub const PUSH_OFFSET: u8 = 95;
+
+/// Opcode of the smallest push instruction.
+pub const PUSH1: u8 = PUSH_OFFSET + 1;
+
+/// Opcode of the largest push instruction.
+pub const PUSH32: u8 = PUSH_OFFSET + 32;
+
+/// Split `code` into the 32-byte chunks stored in the tree.
+///
+/// Chunk `i` holds the `i`-th 31-byte slice of the code (zero-padded)
+/// in bytes `1` through `31`, preceded by one byte counting how many
+/// of the slice's leading bytes are data of a push instruction that
+/// began in an earlier chunk. The count lets a chunk be interpreted
+/// without its predecessors and is capped at `31`, the chunk payload
+/// size.
+pub fn chunkify_code(code: &[u8]) -> Vec<[u8; 32]> {
+    let padded_len = code.len().div_ceil(31) * 31;
+    let mut code = code.to_vec();
+    code.resize(padded_len, 0);
+
+    // Number of push-data bytes remaining at each position, counting
+    // the position itself; `0` marks executable bytes. The extra 32
+    // entries let the largest push record data past the end of the
+    // code.
+    let mut remaining_push_data = vec![0u8; padded_len + 32];
+    let mut position = 0;
+    while position < padded_len {
+        let opcode = code[position];
+        let push_data_bytes = if (PUSH1..=PUSH32).contains(&opcode) {
+            (opcode - PUSH_OFFSET) as usize
+        } else {
+            0
+        };
+        position += 1;
+        for offset in 0..push_data_bytes {
+            remaining_push_data[position + offset] = (push_data_bytes - offset) as u8;
+        }
+        position += push_data_bytes;
+    }
+
+    (0..padded_len)
+        .step_by(31)
+        .map(|start| {
+            let mut chunk = [0u8; 32];
+            chunk[0] = remaining_push_data[start].min(31);
+            chunk[1..].copy_from_slice(&code[start..start + 31]);
+            chunk
+        })
+        .collect()
+}
+
+/// Pack an account's basic data into the 32-byte value stored at
+/// [`BASIC_DATA_LEAF_KEY`].
+///
+/// The fields are packed big-endian: one version byte, three reserved
+/// zero bytes, four bytes of code size, eight bytes of nonce, and
+/// sixteen bytes of balance. Balances are protocol-level `U256`
+/// values, so the sixteen-byte field bound is checked here and
+/// [`BinaryTrieError::BalanceTooLarge`] returned past it.
+///
+/// Note: the 4-byte code size at offset 4 follows the EELS branch
+/// this crate is ported from, which differs from EIP-7864's 3-byte
+/// field at offset 5; the conformance fixture pins this choice.
+pub fn encode_basic_data(
+    code_size: u32,
+    nonce: u64,
+    balance: U256,
+) -> Result<[u8; 32], BinaryTrieError> {
+    if balance >= U256::from(1) << 128 {
+        return Err(BinaryTrieError::BalanceTooLarge);
+    }
+    let mut out = [0u8; 32];
+    out[0] = BASIC_DATA_VERSION;
+    // Bytes 1..4 are reserved zeros: headroom for future header fields.
+    out[4..8].copy_from_slice(&code_size.to_be_bytes());
+    out[8..16].copy_from_slice(&nonce.to_be_bytes());
+    out[16..32].copy_from_slice(&balance.to_big_endian()[16..]);
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -292,6 +376,64 @@ mod tests {
         assert_eq!(c128[0], CODE_ZONE);
         assert_eq!(c128.len(), CODE_KEY_LENGTH);
         assert_eq!(c128[33], 0);
+    }
+
+    #[test]
+    fn chunkify_empty_code_is_empty() {
+        assert!(chunkify_code(&[]).is_empty());
+    }
+
+    #[test]
+    fn chunkify_pads_to_31_and_prepends_offset_byte() {
+        let chunks = chunkify_code(&[0x00]);
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(chunks[0][0], 0);
+        assert_eq!(chunks[0][1], 0x00);
+        assert_eq!(&chunks[0][2..], &[0u8; 30]);
+    }
+
+    #[test]
+    fn chunkify_push4_spilling_into_next_chunk() {
+        // PUSH4 at position 29; data at 30..34; chunk 1 starts at 31
+        // with 3 leading push-data bytes.
+        let mut code = vec![0x01; 29];
+        code.push(0x63);
+        code.extend([0xaa, 0xbb, 0xcc, 0xdd]);
+        code.extend([0x01; 10]);
+        let chunks = chunkify_code(&code);
+        assert_eq!(chunks.len(), 2);
+        assert_eq!(chunks[0][0], 0);
+        assert_eq!(chunks[1][0], 3);
+    }
+
+    #[test]
+    fn chunkify_caps_offset_byte_at_31() {
+        // PUSH32 as last byte of chunk 0: all 32 data bytes follow, but
+        // the count byte saturates at 31.
+        let mut code = vec![0x01; 30];
+        code.push(0x7f);
+        code.extend(0..32u8);
+        code.extend([0x01; 5]);
+        let chunks = chunkify_code(&code);
+        assert_eq!(chunks[1][0], 31);
+    }
+
+    #[test]
+    fn encode_basic_data_layout_vector() {
+        // fixture: encode_basic_data[1]
+        assert_eq!(
+            encode_basic_data(1234, 42, U256::from(10).pow(U256::from(18))).unwrap(),
+            hex!("00000000000004d2000000000000002a00000000000000000de0b6b3a7640000")
+        );
+    }
+
+    #[test]
+    fn encode_basic_data_rejects_balance_at_2_pow_128() {
+        assert_eq!(
+            encode_basic_data(0, 0, U256::from(1) << 128),
+            Err(BinaryTrieError::BalanceTooLarge)
+        );
+        assert!(encode_basic_data(0, 0, (U256::from(1) << 128) - 1).is_ok());
     }
 
     #[test]

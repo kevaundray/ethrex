@@ -12,6 +12,24 @@ use serde::Deserialize;
 struct Fixture {
     trie_roots: Vec<TrieCase>,
     embedding: EmbeddingVectors,
+    chunkify_code: Vec<ChunkifyCase>,
+    encode_basic_data: Vec<BasicDataCase>,
+}
+
+#[derive(Deserialize)]
+struct ChunkifyCase {
+    name: String,
+    code: String,
+    chunks: Vec<String>,
+}
+
+#[derive(Deserialize)]
+struct BasicDataCase {
+    code_size: u32,
+    nonce: u64,
+    /// Hex string; balances can exceed `u64`.
+    balance: String,
+    encoded: String,
 }
 
 #[derive(Deserialize)]
@@ -110,6 +128,48 @@ fn embedding_keys_match_spec() {
             embedding::get_tree_key_for_code_chunk(&address32, &code_hash, chunk_id),
             unhex(expected),
             "code chunk {chunk_id}"
+        );
+    }
+}
+
+#[test]
+fn chunkify_matches_spec() {
+    let cases = load().chunkify_code;
+    assert_eq!(cases.len(), 4, "fixture chunkify case count");
+    for case in cases {
+        let chunks = embedding::chunkify_code(&unhex(&case.code));
+        assert_eq!(
+            chunks.len(),
+            case.chunks.len(),
+            "chunkify case {}",
+            case.name
+        );
+        for (i, (chunk, expected)) in chunks.iter().zip(&case.chunks).enumerate() {
+            assert_eq!(
+                chunk.as_slice(),
+                unhex(expected).as_slice(),
+                "chunkify case {} chunk {i}",
+                case.name
+            );
+        }
+    }
+}
+
+#[test]
+fn basic_data_matches_spec() {
+    let cases = load().encode_basic_data;
+    assert_eq!(cases.len(), 3, "fixture basic-data case count");
+    for case in cases {
+        let balance = U256::from_str_radix(case.balance.trim_start_matches("0x"), 16)
+            .expect("fixture hex balance");
+        assert_eq!(
+            embedding::encode_basic_data(case.code_size, case.nonce, balance)
+                .unwrap()
+                .as_slice(),
+            unhex(&case.encoded).as_slice(),
+            "basic data case code_size={} nonce={}",
+            case.code_size,
+            case.nonce
         );
     }
 }

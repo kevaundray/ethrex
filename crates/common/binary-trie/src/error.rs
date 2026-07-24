@@ -15,4 +15,7 @@ pub enum BinaryTrieError {
     /// which the tree cannot represent (a leaf terminates its path).
     #[error("key is a prefix of another key in the trie")]
     PrefixViolation,
+    /// Balance does not fit the 16-byte field of the basic data leaf.
+    #[error("balance does not fit the 16-byte basic-data field")]
+    BalanceTooLarge,
 }
