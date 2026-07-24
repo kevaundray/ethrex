@@ -51,3 +51,20 @@ fn rebuild_matches_spec_roots() {
         );
     }
 }
+
+#[test]
+fn incremental_matches_spec_roots() {
+    for case in load().trie_roots {
+        let mut trie = ethrex_binary_trie::trie::BinaryTrie::new();
+        for e in &case.entries {
+            trie.insert(unhex(&e.key), unhex(&e.value).try_into().unwrap())
+                .unwrap();
+        }
+        assert_eq!(
+            trie.root().as_bytes(),
+            unhex(&case.root).as_slice(),
+            "trie case {}",
+            case.name
+        );
+    }
+}

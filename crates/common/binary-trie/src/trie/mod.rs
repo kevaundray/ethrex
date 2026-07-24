@@ -2,10 +2,12 @@
 //! prefix-free variable-length bit keys to 32-byte values, committing
 //! to its contents with BLAKE3 hashes up to a single root.
 
+mod binary_trie;
 pub mod bits;
 pub mod node;
 pub mod rebuild;
 
+pub use binary_trie::BinaryTrie;
 pub use node::EMPTY_TRIE_ROOT;
 
 /// Longest accepted key, in bytes. Bounds branch-prefix bit counts
