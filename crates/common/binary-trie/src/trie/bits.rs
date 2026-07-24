@@ -15,7 +15,10 @@ pub fn bytes_to_bits(data: &[u8]) -> Vec<u8> {
 /// prefixes differing only in trailing zero bits would pack to the
 /// same bytes and two different trees could share a root.
 pub fn encode_bit_prefix(prefix: &[u8]) -> Vec<u8> {
-    debug_assert!(prefix.len() < 1 << 16);
+    assert!(
+        prefix.len() < 1 << 16,
+        "prefix bit count must fit in two bytes"
+    );
     let mut out = vec![0u8; 2 + prefix.len().div_ceil(8)];
     out[..2].copy_from_slice(&(prefix.len() as u16).to_be_bytes());
     for (i, bit) in prefix.iter().enumerate() {

@@ -3864,6 +3864,7 @@ version = "22.0.0"
 dependencies = [
  "blake3",
  "ethereum-types 0.15.1",
+ "hex",
  "hex-literal 0.4.1",
  "rand 0.8.5",
  "serde",
