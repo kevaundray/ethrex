@@ -620,6 +620,25 @@ async fn binary_tree_storage_zeroing_removes_slot_from_snapshot() {
     // Both roots validated on import (`store_block` would have rejected a
     // mismatch); re-assert the header/snapshot linkage explicitly.
     assert_binary_snapshots(&store, &imported);
+
+    // The public number-addressed storage read (`eth_getStorageAt`'s path)
+    // must resolve the MPT through the side registry, not through the
+    // header's (PBT) state root: the slot reads back at block 1 and is
+    // gone at block 2.
+    assert_eq!(
+        store
+            .get_storage_at(1, contract, slot)
+            .expect("get_storage_at must resolve the MPT lookup root under the flag"),
+        Some(slot_value),
+        "block-1 storage read through the public path must return the SSTOREd value"
+    );
+    assert_eq!(
+        store
+            .get_storage_at(2, contract, slot)
+            .expect("get_storage_at must resolve the MPT lookup root under the flag"),
+        None,
+        "block-2 storage read must reflect the zeroed (absent) slot"
+    );
 }
 
 /// While headers carry binary-trie roots, the MPT must keep serving state
@@ -817,6 +836,119 @@ async fn binary_tree_restart_loses_registries_and_replay_recovers() {
         block3.header.state_root,
         snapshot3.compute_root().unwrap(),
         "block-3 header must commit to the stored snapshot's binary root"
+    );
+}
+
+/// Flag-variant of `canonical_commit_gate_tests::forkchoice_flushes_committable_backlog_and_prunes_genesis`:
+/// the safe-commit gate compares against MPT layer roots, so under the flag
+/// it must resolve the target block's root through the side registry — the
+/// raw header root is a PBT root that matches no layer, which would leave
+/// the committable backlog unflushed forever (and genesis never pruned).
+///
+/// Import `> DB_COMMIT_THRESHOLD` (128) blocks via `add_block` without any
+/// forkchoice update, then canonicalize with a single FCU (the `import`
+/// flow). The flush must advance the on-disk MPT past genesis: the genesis
+/// MPT lookup root becomes unserveable while the head's stays available.
+///
+/// RocksDB-only for the same reason as the unflagged twin: the InMemory
+/// commit threshold (10000) is unreachable with this few blocks.
+#[cfg(feature = "rocksdb")]
+#[tokio::test]
+async fn binary_tree_forkchoice_flushes_backlog_through_mpt_lookup_roots() {
+    // Strictly greater than DB_COMMIT_THRESHOLD (128) so the canonical block
+    // at `head - 128` exists and is a committable layer.
+    const BLOCKS: u64 = 130;
+
+    let sk = test_secret_key();
+    let sender = sender_from_key(&sk);
+    let signer: Signer = LocalSigner::new(sk).into();
+
+    let genesis = load_genesis_fixture("l1-binarytree.json", sender, &[]);
+    let chain_id = genesis.config.chain_id;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().to_str().unwrap();
+
+    let mut store = Store::new(path, EngineType::RocksDB).expect("rocksdb store");
+    store
+        .add_initial_state(genesis)
+        .await
+        .expect("genesis init");
+    let blockchain = Blockchain::default_with_store(store.clone());
+
+    let genesis_header = store.get_block_header(0).unwrap().unwrap();
+    let genesis_mpt_root = store
+        .get_mpt_lookup_root(genesis_header.hash())
+        .unwrap()
+        .expect("genesis MPT lookup root must be registered");
+    assert!(
+        store.has_state_root(genesis_mpt_root).unwrap(),
+        "precondition: the genesis MPT state must be present after init"
+    );
+
+    // Import BLOCKS blocks via `add_block`, WITHOUT any forkchoice_update
+    // (mirrors the `import` command).
+    let mut parent = genesis_header;
+    let mut canonical: Vec<(u64, H256)> = Vec::with_capacity(BLOCKS as usize);
+    for nonce in 0..BLOCKS {
+        let tx = transfer_tx(
+            chain_id,
+            nonce,
+            test_recipient(),
+            U256::from(1_000_000u64),
+            &signer,
+        )
+        .await;
+        blockchain.add_transaction_to_pool(tx).await.unwrap();
+
+        let block = build_block(&store, &blockchain, &parent).await;
+        assert_eq!(block.body.transactions.len(), 1);
+        blockchain
+            .add_block(block.clone())
+            .expect("block should import under the binary-tree flag");
+        blockchain
+            .remove_block_transactions_from_pool(&block)
+            .unwrap();
+        canonical.push((block.header.number, block.hash()));
+        parent = block.header;
+    }
+    let head_mpt_root = store
+        .get_mpt_lookup_root(parent.hash())
+        .unwrap()
+        .expect("head MPT lookup root must be registered");
+
+    // Nothing flushed yet: no FCU ran, so the safe-commit cell is still zero.
+    assert!(
+        store.has_state_root(genesis_mpt_root).unwrap(),
+        "before forkchoice_update nothing is flushed: genesis must still be present"
+    );
+
+    // Canonicalize the whole chain with one FCU, exactly like `import` does.
+    let (head_number, head_hash) = canonical.pop().expect("at least one block imported");
+    store
+        .forkchoice_update(
+            canonical,
+            head_number,
+            head_hash,
+            Some(head_number),
+            Some(head_number),
+        )
+        .await
+        .expect("forkchoice_update");
+    store
+        .wait_for_persistence_idle()
+        .await
+        .expect("wait_for_persistence_idle");
+
+    // The gate resolved the target block's MPT root through the registry and
+    // flushed the backlog: the on-disk MPT advanced past genesis.
+    assert!(
+        !store.has_state_root(genesis_mpt_root).unwrap(),
+        "after forkchoice_update the committable backlog must flush and prune genesis \
+         (regression: a raw PBT header root matches no MPT layer, so nothing ever commits)"
+    );
+    assert!(
+        store.has_state_root(head_mpt_root).unwrap(),
+        "recent (head) MPT state must remain serveable after the flush"
     );
 }
 

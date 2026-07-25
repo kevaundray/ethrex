@@ -2794,7 +2794,15 @@ impl Store {
         storage_key: H256,
     ) -> Result<Option<U256>, StoreError> {
         match self.get_block_header(block_number)? {
-            Some(header) => self.get_storage_at_root(header.state_root, address, storage_key),
+            // Resolves to `header.state_root` unless the experimental
+            // binary-tree flag redirects the MPT lookup through the side
+            // registry (the header then commits to the binary-tree root,
+            // which addresses no MPT).
+            Some(header) => self.get_storage_at_root(
+                self.mpt_state_root_for_header(&header)?,
+                address,
+                storage_key,
+            ),
             None => Ok(None),
         }
     }
@@ -2997,7 +3005,11 @@ impl Store {
         let Some(header) = self.get_block_header_by_hash(hash)? else {
             return Ok(None);
         };
-        Ok(Some(header.state_root))
+        // The safe-commit cell is compared against MPT layer roots, so under
+        // the experimental binary-tree flag the target's root must resolve
+        // through the side registry — the raw header root is a PBT root that
+        // matches no layer, which would leave the backlog unflushed forever.
+        Ok(Some(self.mpt_state_root_for_header(&header)?))
     }
 
     /// Obtain the storage trie for the given block
@@ -3021,10 +3033,14 @@ impl Store {
         let Some(header) = self.get_block_header_by_hash(block_hash)? else {
             return Ok(None);
         };
+        // Resolves to `header.state_root` unless the experimental binary-tree
+        // flag redirects the MPT lookup through the side registry. The same
+        // resolved root must anchor BOTH trie opens below: the layer cache is
+        // keyed by MPT roots, so a raw (PBT) header root would silently miss
+        // every uncommitted layer.
+        let mpt_root = self.mpt_state_root_for_header(&header)?;
         // Fetch Account from state_trie
-        let Some(state_trie) = self.state_trie(block_hash)? else {
-            return Ok(None);
-        };
+        let state_trie = self.open_state_trie(mpt_root)?;
         let hashed_address = hash_address_fixed(&address);
         let Some(encoded_account) = state_trie.get(hashed_address.as_bytes())? else {
             return Ok(None);
@@ -3034,7 +3050,7 @@ impl Store {
         let storage_root = account.storage_root;
         Ok(Some(self.open_storage_trie(
             hashed_address,
-            header.state_root,
+            mpt_root,
             storage_root,
         )?))
     }
