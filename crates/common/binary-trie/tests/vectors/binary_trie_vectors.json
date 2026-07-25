@@ -408,6 +408,17 @@
       },
       "root": "0x9d3450653ed80518641c57585b3930d099a1d33c1745fa81696a6a1124f44d2f"
     },
+    "diff1": {
+      "eoa": {
+        "nonce": 8,
+        "balance": "0x1bc16d674ec80000"
+      },
+      "contract_storage": {
+        "0": "0x0",
+        "64": "0x9"
+      }
+    },
+    "diff2": "delete contract account",
     "post_diff1_root": "0x6b8e098fdbad52b8879b2b840f2b20aa52398d42b32eb19995974f53c99bcbe6",
     "post_delete_contract_root": "0x913ff4440a5fbc582a2dbd8c390e0f902607d640bc6f6a7eddca9acf4ff448bd"
   }

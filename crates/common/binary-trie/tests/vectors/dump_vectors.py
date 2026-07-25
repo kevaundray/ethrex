@@ -31,6 +31,15 @@ from ethereum.binary_trie.embedding import (
     get_tree_key_for_storage_slot,
 )
 from ethereum.crypto.hash import keccak256
+from ethereum.state import Account, BlockDiff
+from ethereum.state_pbt import (
+    State as PbtSpecState,
+    apply_changes_to_state,
+    set_account,
+    set_storage,
+    state_root,
+    store_code,
+)
 
 
 def hx(b: bytes) -> str:
@@ -181,16 +190,9 @@ basic_data_cases = [
 ]
 
 # --- Flat-state embedding vectors (state_pbt.py) ---
-from ethereum.state import Account, BlockDiff
-from ethereum.state_pbt import (
-    State as PbtSpecState,
-    apply_changes_to_state,
-    set_account,
-    set_storage,
-    state_root,
-    store_code,
-)
-
+# Shared constants: the spec state/diffs AND the serialized fixture
+# are both derived from these, so the declared pre-state and diff
+# descriptions can never drift from the committed roots.
 ADDR_EOA = Bytes20(bytes.fromhex("1000000000000000000000000000000000000001"))
 ADDR_CONTRACT = Bytes20(
     bytes.fromhex("2000000000000000000000000000000000000002")
@@ -199,38 +201,57 @@ ADDR_CONTRACT = Bytes20(
 # 4030 bytes = 130 chunks of 31 bytes; PUSH data crosses chunk boundaries.
 CONTRACT_CODE = Bytes(bytes([0x60, 0xAA, 0x01] * 1343 + [0x00]))
 
+EOA_NONCE = 7
+EOA_BALANCE = 10**18
+CONTRACT_NONCE = 1
+CONTRACT_BALANCE = 2**127 - 1
+STORAGE_SLOTS = [(0, 0xDEAD), (63, 1), (64, 2), (300, 3)]
+
+DIFF1_EOA_NONCE = 8
+DIFF1_EOA_BALANCE = 2 * 10**18
+DIFF1_STORAGE = [(0, 0), (64, 9)]  # slot 0 -> 0 deletes the leaf
+
+
+def slot_key(slot: int) -> Bytes32:
+    return Bytes32(slot.to_bytes(32, "big"))
+
+
 spec_state = PbtSpecState()
 code_hash = store_code(spec_state, CONTRACT_CODE)
 set_account(
     spec_state,
     ADDR_EOA,
-    Account(nonce=Uint(7), balance=U256(10**18), code_hash=keccak256(b"")),
+    Account(
+        nonce=Uint(EOA_NONCE),
+        balance=U256(EOA_BALANCE),
+        code_hash=keccak256(b""),
+    ),
 )
 set_account(
     spec_state,
     ADDR_CONTRACT,
-    Account(nonce=Uint(1), balance=U256(2**127 - 1), code_hash=code_hash),
+    Account(
+        nonce=Uint(CONTRACT_NONCE),
+        balance=U256(CONTRACT_BALANCE),
+        code_hash=code_hash,
+    ),
 )
-for slot, val in [(0, 0xDEAD), (63, 1), (64, 2), (300, 3)]:
-    set_storage(
-        spec_state,
-        ADDR_CONTRACT,
-        Bytes32(int(slot).to_bytes(32, "big")),
-        U256(val),
-    )
+for slot, val in STORAGE_SLOTS:
+    set_storage(spec_state, ADDR_CONTRACT, slot_key(slot), U256(val))
 
 pre_root = state_root(spec_state)
 
 diff1 = BlockDiff(
     account_changes={
         ADDR_EOA: Account(
-            nonce=Uint(8), balance=U256(2 * 10**18), code_hash=keccak256(b"")
+            nonce=Uint(DIFF1_EOA_NONCE),
+            balance=U256(DIFF1_EOA_BALANCE),
+            code_hash=keccak256(b""),
         )
     },
     storage_changes={
         ADDR_CONTRACT: {
-            Bytes32((0).to_bytes(32, "big")): U256(0),
-            Bytes32((64).to_bytes(32, "big")): U256(9),
+            slot_key(slot): U256(val) for slot, val in DIFF1_STORAGE
         }
     },
     code_changes={},
@@ -247,19 +268,25 @@ pbt_state_cases = {
     "contract_address": hx(ADDR_CONTRACT),
     "contract_code": hx(CONTRACT_CODE),
     "pre": {
-        "eoa": {"nonce": 7, "balance": hex(10**18)},
+        "eoa": {"nonce": EOA_NONCE, "balance": hex(EOA_BALANCE)},
         "contract": {
-            "nonce": 1,
-            "balance": hex(2**127 - 1),
-            "storage": {
-                "0": hex(0xDEAD),
-                "63": "0x1",
-                "64": "0x2",
-                "300": "0x3",
-            },
+            "nonce": CONTRACT_NONCE,
+            "balance": hex(CONTRACT_BALANCE),
+            "storage": {str(s): hex(v) for s, v in STORAGE_SLOTS},
         },
         "root": hx(pre_root),
     },
+    # Informational description of the mutations, derived from the same
+    # constants used to build the actual BlockDiffs; the roots below
+    # remain the authority.
+    "diff1": {
+        "eoa": {
+            "nonce": DIFF1_EOA_NONCE,
+            "balance": hex(DIFF1_EOA_BALANCE),
+        },
+        "contract_storage": {str(s): hex(v) for s, v in DIFF1_STORAGE},
+    },
+    "diff2": "delete contract account",
     "post_diff1_root": hx(post_diff1_root),
     "post_delete_contract_root": hx(post_delete_root),
 }
