@@ -38,11 +38,23 @@ implementation (`ethereum/execution-specs`, branch
 `projects/binary-trie`). The generating commit is pinned in the
 fixture's `source_commit` field and regeneration is deterministic.
 
+### State-commitment integration
+
+An experimental state-commitment integration EXISTS behind the
+`enableBinaryTreeAtGenesis` genesis config flag: `PbtState` in
+`ethrex-common` (`crates/common/types/pbt_state.rs`) shadow-tracks the
+flat state, re-embeds it through this crate per block, and under the
+flag `header.state_root` commits to the binary-trie root while the MPT
+stays the lookup structure. See
+`docs/plans/2026-07-25-binary-trie-state-commitment.md` (including its
+"Implementation notes (as-built)" section) for scope and limitations.
+
 ### Non-goals (today)
 
 No persistence/`TrieDB` backing, no hash caching, no deletion, no
-proofs, no fork wiring. These are deferred to the state-commitment
-integration work.
+proofs, no witness/sync/`eth_getProof` support. The integration above
+recomputes roots by full re-embed per block; incremental maintenance
+and the rest are deferred (see the plan doc's Phase 2 roadmap).
 
 ### Spec discrepancy
 

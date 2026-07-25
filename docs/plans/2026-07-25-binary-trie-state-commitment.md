@@ -583,3 +583,80 @@ Fully mapped during planning (line refs from `bad1f85c`); kept here so the trans
 - Outside `genesis.rs`: `tooling/ef_tests/state/runner/revm_runner.rs:688-718` `fork_to_spec_id` (exhaustive — add `=> SpecId::OSAKA`); the exact-JSON ChainConfig assertion in `crates/networking/rpc/rpc.rs:1813` gains `"binaryTreeTime": null`; string→fork maps worth extending: `tooling/ef_tests/engine/src/fixture.rs:245-268,315`, `tooling/ef_tests/state/deserialize.rs:309-325`; `tooling/ef_tests/blockchain/fork.rs:167-168` has its own separate Hive fork enum.
 - Non-breaking `Fork::Hegota` ordering gates that automatically extend (verify only): `crates/vm/system_contracts.rs:113`, `crates/vm/backends/mod.rs:193`, `crates/vm/backends/levm/mod.rs:3508`, `crates/vm/levm/src/opcodes.rs:427,434,657`, `crates/blockchain/blockchain.rs:3247`, `crates/blockchain/payload.rs:726`, `crates/vm/levm/src/vm.rs:138-142`.
 - Migration note: when the variant lands, `enable_binary_tree_at_genesis: true` becomes sugar for (or is replaced by) `binaryTreeTime: <= genesis.timestamp`; experimental genesis fixtures updated in the same change.
+
+---
+
+## Implementation notes (as-built)
+
+Recorded at the end of Task 8 (branch `kw/bin-trie-integration`). The plan
+above is history; this section records what actually shipped, where it
+diverged, and the known limitations.
+
+**Shipped.** Genesis seeding, block import (single, batch-via-fallback, and
+pipeline paths) and payload building all commit and validate binary-trie
+(PBT) roots under `enable_binary_tree_at_genesis`; the MPT remains the
+lookup structure. `Genesis::compute_state_root` returns the PBT root under
+the flag; `Genesis::compute_mpt_state_root` exposes the flag-off
+computation for the lookup side.
+
+**Divergence: the `mpt_lookup_roots` side registry.** Unplanned. The plan
+assumed the MPT could keep being addressed by `header.state_root`; under
+the flag that field carries the PBT root, which addresses no MPT, so
+headers can no longer name their own lookup structure. `Store` grew an
+in-memory registry (`mpt_lookup_roots`, companion to `pbt_states`)
+recording, per block hash, the MPT root the block's state is stored under,
+resolved via `Store::mpt_state_root_for_header`. Every MPT consumer that
+starts from a header routes through it (`state_trie`, `storage_trie`,
+`get_storage_at`, ancestor iteration, the safe-commit gate
+`compute_safe_commit_root`). Flag off, the helper returns
+`header.state_root` untouched.
+
+**Divergence: pipeline update collection.** `add_block_pipeline` only
+accumulated raw account updates when building witnesses. Under the flag
+the merkleizer must always accumulate them (the snapshot extension needs
+the per-block diff), so the condition generalized to
+`collect_updates = collect_witness || enable_binary_tree_at_genesis`
+(`crates/blockchain/blockchain.rs`). Flag off this is behaviorally
+identical to the old `collect_witness`.
+
+**Limitation: engine API degrades to SYNCING.** The FCU/newPayload paths
+probe `has_state_root(header.state_root)` directly
+(`crates/blockchain/fork_choice.rs:176`,
+`crates/networking/rpc/engine/payload.rs:1237`, similarly
+`rpc/eth/client.rs:75` for the eth-client head probe). Under the flag the
+header root is a PBT root that no MPT layer ever matches, so these probes
+report the state as absent and the node answers SYNCING — the safe
+direction, but it means a flag-on node is not yet drivable end-to-end
+through the engine API. `eth_getProof` is likewise unpatched (proofs over
+the binary trie are out of scope; it would prove against the wrong trie).
+Tracing/prewarm paths that key off header roots degrade conservatively
+(skip/fall back) rather than corrupt.
+
+**Limitation: in-memory registries.** Both registries (`pbt_states`,
+`mpt_lookup_roots`) are in-memory only:
+
+- Lost on restart. The rocksdb restart test
+  (`binary_tree_restart_loses_registries_and_replay_recovers`) documents
+  the recovery contract: reopening the datadir re-seeds the GENESIS
+  entries automatically (`add_initial_state`'s matching-genesis path
+  re-derives them from the genesis file), and everything past genesis is
+  recovered by replaying blocks from genesis; `put_pbt_state` /
+  `put_mpt_lookup_root` remain the offline-seeding seam for nodes that
+  cannot replay. The skip-validation boot path seeds nothing (its alloc
+  does not describe the stored state) and requires offline seeding.
+- Never evicted: memory is O(blocks x state). Acceptable for short-lived
+  experimental devnets only; keep-last-N pruning is the first Phase 2
+  upgrade (Seam A).
+
+**Harness discovery: EIP-8037 state gas.** The fixture is Amsterdam at
+genesis, so transactions pay EIP-8037 state gas on top of execution gas
+(e.g. `STATE_BYTES_PER_NEW_ACCOUNT (120) * cost_per_state_byte (1530) =
+183_600` for a transfer that materializes a new account, spilled from the
+tx gas limit). A 100k gas limit made every transfer fail-in-block; the
+binary-tree tests use `TEST_GAS_LIMIT = 400_000`
+(`test/tests/blockchain/binary_tree_tests.rs`).
+
+**Phase 2.** The roadmap above ("Phase 2 roadmap") is unchanged by any of
+this: all upgrades still slot in behind Seam A (the snapshot registry) and
+Seam B (`PbtState::compute_root`), with bit-identical committed roots as
+the invariant.
