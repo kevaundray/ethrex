@@ -276,10 +276,15 @@ impl BinaryTrie {
     /// returns the empty proof, which proves exclusion against
     /// [`EMPTY_TRIE_ROOT`].
     ///
-    /// Cost: with no hash caching, sibling subtrees along the path
-    /// are hashed from scratch — O(trie size) per call, same order as
-    /// [`Self::root`]. Fine at the experimental scale this crate
-    /// targets; hash caching is a documented Phase 2 upgrade.
+    /// Cost: with no hash caching, both subtrees of every branch on
+    /// the path are hashed from scratch — O(trie size) for the
+    /// hash-distributed keys the embedding produces (paths are
+    /// logarithmic, so the sibling hashing dominates and sums to one
+    /// tree sweep, same order as [`Self::root`]). Adversarially
+    /// degenerate shapes with long paths cost more, since subtrees on
+    /// the path re-merkleize once per ancestor. Fine at the
+    /// experimental scale this crate targets; hash caching is a
+    /// documented Phase 2 upgrade.
     pub fn prove(&self, key: &[u8]) -> Vec<Vec<u8>> {
         let mut proof = Vec::new();
         let Some(mut node) = self.root.as_ref() else {

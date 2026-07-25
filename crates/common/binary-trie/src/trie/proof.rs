@@ -171,17 +171,20 @@ pub fn verify_proof(
         return Err(ProofError::RootHashMismatch);
     }
 
+    // A terminal node (leaf, or branch the key diverges from) must be
+    // the proof's last element.
+    let terminal = |i: usize| {
+        if i + 1 == proof.len() {
+            Ok(())
+        } else {
+            Err(ProofError::TrailingNodes)
+        }
+    };
+
     let bits = bytes_to_bits(key);
     let mut depth = 0usize;
     let mut index = 0usize;
     loop {
-        let terminal = |i: usize| {
-            if i + 1 == proof.len() {
-                Ok(())
-            } else {
-                Err(ProofError::TrailingNodes)
-            }
-        };
         match parse_node(&proof[index]).ok_or(ProofError::MalformedNode(index))? {
             ParsedNode::Leaf {
                 key: leaf_key,

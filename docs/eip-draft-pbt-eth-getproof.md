@@ -4,6 +4,7 @@ title: eth_getProof for Partitioned Binary Tree state
 description: Interim experimental eth_getProof response format for chains committing state via the EIP-8297 Partitioned Binary Tree
 author: (draft, unassigned)
 discussions-to: (none — implementation-track draft, see Abstract)
+# TODO: author and discussions-to must be filled with real values before any submission toward the EIPs repo.
 status: Draft
 type: Standards Track
 category: Interface

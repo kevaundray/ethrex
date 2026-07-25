@@ -9,9 +9,10 @@ use crate::types::account_proof::{
 use crate::types::block_identifier::{BlockIdentifierOrHash, BlockTag};
 use crate::utils::RpcErr;
 use ethrex_binary_trie::embedding::{
-    address20_to_address32, decode_basic_data, get_tree_key_for_basic_data,
+    BASIC_DATA_VERSION, address20_to_address32, decode_basic_data, get_tree_key_for_basic_data,
     get_tree_key_for_code_hash, get_tree_key_for_storage_slot,
 };
+use ethrex_binary_trie::trie::BinaryTrie;
 use ethrex_common::types::BlockHeader;
 use ethrex_common::{Address, BigEndianHash, H256, U256, serde_utils};
 
@@ -301,12 +302,17 @@ impl GetProofRequest {
 
         // Decoded conveniences only; the proven leaf values are
         // authoritative (absent leaves -> zero defaults).
-        let (nonce, balance) = match &basic_data.value {
-            Some(leaf) => {
-                let decoded = decode_basic_data(&leaf.0);
+        let (nonce, balance) = match basic_data
+            .value
+            .as_ref()
+            .map(|leaf| decode_basic_data(&leaf.0))
+        {
+            // An unknown layout version must not be misread positionally:
+            // zero the conveniences and let consumers decode the proven leaf.
+            Some(decoded) if decoded.version == BASIC_DATA_VERSION => {
                 (decoded.nonce, decoded.balance)
             }
-            None => (0, U256::zero()),
+            _ => (0, U256::zero()),
         };
         let code_hash = code_hash_leaf.value.unwrap_or_default();
 
@@ -348,10 +354,7 @@ impl GetProofRequest {
 /// Look up and prove one tree key against `trie`, pairing the leaf
 /// value (`None` when absent) with the matching inclusion/exclusion
 /// proof from the same walk.
-fn prove_tree_key(
-    trie: &ethrex_binary_trie::trie::BinaryTrie,
-    tree_key: Vec<u8>,
-) -> BinaryTreeKeyProof {
+fn prove_tree_key(trie: &BinaryTrie, tree_key: Vec<u8>) -> BinaryTreeKeyProof {
     BinaryTreeKeyProof {
         value: trie.get(&tree_key).map(H256),
         proof: trie.prove(&tree_key),
