@@ -22,7 +22,7 @@ use crate::error::BinaryTrieError;
 
 use super::MAX_KEY_LENGTH;
 use super::bits::bytes_to_bits;
-use super::node::{EMPTY_TRIE_ROOT, branch_hash, leaf_hash};
+use super::node::{EMPTY_TRIE_ROOT, branch_hash, branch_preimage, leaf_hash, leaf_preimage};
 
 enum Node {
     Leaf {
@@ -254,6 +254,63 @@ impl BinaryTrie {
                     let split = depth + prefix.len();
                     if split >= bits.len() || bits[depth..split] != prefix[..] {
                         return None;
+                    }
+                    node = if bits[split] == 0 { left } else { right };
+                    depth = split + 1;
+                }
+            }
+        }
+    }
+
+    /// Per-key proof: the ordered node preimages along `key`'s walk
+    /// from the root, for [`super::proof::verify_proof`] to check by
+    /// pure recomputation (format: `docs/eip-draft-pbt-eth-getproof.md`).
+    ///
+    /// The same walk serves both claims — the terminal node decides:
+    /// a leaf carrying `key` yields an inclusion proof; a leaf with a
+    /// different key, or a branch whose prefix `key`'s bits diverge
+    /// from (or exhaust inside), yields an exclusion proof, and the
+    /// walk stops there (a diverging branch's committed prefix
+    /// already excludes `key` from its whole subtree). The empty trie
+    /// returns the empty proof, which proves exclusion against
+    /// [`EMPTY_TRIE_ROOT`].
+    ///
+    /// Cost: with no hash caching, sibling subtrees along the path
+    /// are hashed from scratch — O(trie size) per call, same order as
+    /// [`Self::root`]. Fine at the experimental scale this crate
+    /// targets; hash caching is a documented Phase 2 upgrade.
+    pub fn prove(&self, key: &[u8]) -> Vec<Vec<u8>> {
+        let mut proof = Vec::new();
+        let Some(mut node) = self.root.as_ref() else {
+            return proof;
+        };
+        let bits = bytes_to_bits(key);
+        let mut depth = 0;
+        loop {
+            match node {
+                Node::Leaf {
+                    key: leaf_key,
+                    value,
+                } => {
+                    proof.push(leaf_preimage(leaf_key, value));
+                    return proof;
+                }
+                Node::Branch {
+                    prefix,
+                    left,
+                    right,
+                } => {
+                    proof.push(branch_preimage(
+                        prefix,
+                        Self::merkleize(left),
+                        Self::merkleize(right),
+                    ));
+                    let split = depth + prefix.len();
+                    if split >= bits.len() || bits[depth..split] != prefix[..] {
+                        // The key diverges from (or exhausts inside)
+                        // this branch's prefix: terminal exclusion
+                        // witness, mirroring the verifier's walk.
+                        return proof;
                     }
                     node = if bits[split] == 0 { left } else { right };
                     depth = split + 1;
