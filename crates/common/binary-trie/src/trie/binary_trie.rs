@@ -24,6 +24,7 @@ use super::MAX_KEY_LENGTH;
 use super::bits::bytes_to_bits;
 use super::node::{EMPTY_TRIE_ROOT, branch_hash, branch_preimage, leaf_hash, leaf_preimage};
 
+#[derive(Debug)]
 enum Node {
     Leaf {
         key: Vec<u8>,
@@ -40,7 +41,7 @@ enum Node {
 
 /// Compressed binary radix trie over prefix-free byte keys and
 /// 32-byte values, committing to its contents with a BLAKE3 root.
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub struct BinaryTrie {
     root: Option<Node>,
 }
