@@ -733,7 +733,20 @@ pub async fn init_l1(
         init_datadir(&datadir);
     }
 
-    let genesis = network.get_genesis()?;
+    let mut genesis = network.get_genesis()?;
+    if opts.experimental_binary_tree {
+        // Same effect as `enableBinaryTreeAtGenesis: true` in the genesis
+        // JSON, applied before the genesis hash/state root are computed so
+        // every flagged node derives the identical flagged genesis. The flag
+        // must match the stored chain config on reopen; `add_initial_state`'s
+        // genesis-hash comparison enforces that (a mismatch is rejected as an
+        // incompatible genesis, since the state root differs).
+        warn!(
+            "EXPERIMENTAL: committing state through the EIP-8297 binary trie \
+             (--experimental.binary-tree)"
+        );
+        genesis.config.enable_binary_tree_at_genesis = true;
+    }
     display_chain_initialization(&genesis);
     debug!("Preloading KZG trusted setup");
     ethrex_crypto::kzg::warm_up_trusted_setup();

@@ -156,6 +156,21 @@ pub struct Options {
     )]
     pub dev: bool,
     #[arg(
+        long = "experimental.binary-tree",
+        action = ArgAction::SetTrue,
+        help = "EXPERIMENTAL: commit state through the EIP-8297 binary trie",
+        long_help = "EXPERIMENTAL: force `enableBinaryTreeAtGenesis` on the loaded genesis, \
+                     making genesis and block state roots EIP-8297 Partitioned-Binary-Tree \
+                     roots instead of MPT roots. Equivalent to setting the flag in the genesis \
+                     JSON; exists so stock genesis generators (e.g. kurtosis/ethereum-package) \
+                     can run binary-tree devnets without emitting the custom field. Every node \
+                     on the network must agree on it — nodes that disagree diverge at the \
+                     genesis hash. Activation is genesis-only.",
+        help_heading = "Node options",
+        env = "ETHREX_EXPERIMENTAL_BINARY_TREE"
+    )]
+    pub experimental_binary_tree: bool,
+    #[arg(
         long = "log.level",
         default_value_t = Level::INFO,
         value_name = "LOG_LEVEL",
@@ -518,6 +533,7 @@ impl Default for Options {
             log_level: Level::INFO,
             log_color: Default::default(),
             log_dir: None,
+            experimental_binary_tree: false,
             authrpc_addr: Default::default(),
             authrpc_port: Default::default(),
             authrpc_jwtsecret: Default::default(),

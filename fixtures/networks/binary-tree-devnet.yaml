@@ -1,0 +1,65 @@
+# EIP-8297 binary-tree (PBT) experimental devnet.
+#
+# Every EL is ethrex with --experimental.binary-tree, which forces
+# `enableBinaryTreeAtGenesis` on the generated genesis: all nodes derive the
+# identical PBT-committed genesis and every block header carries a
+# Partitioned-Binary-Tree state root instead of an MPT root. Non-ethrex ELs
+# cannot join this network — they would reject the PBT roots.
+#
+# Run: make localnet KURTOSIS_CONFIG_FILE=./fixtures/networks/binary-tree-devnet.yaml
+#
+# Notes:
+# - The PBT commitment re-embeds the full flat state per block (experimental,
+#   O(state) per block) and snapshots live in memory, so keep spam throughput
+#   modest and the devnet short-lived.
+# - The commitment flag is orthogonal to the fork schedule: this uses the
+#   package's default (non-Amsterdam) forks and stock lighthouse images.
+participants:
+  - el_type: ethrex
+    el_image: ethrex:local
+    cl_type: lighthouse
+    cl_image: sigp/lighthouse:v8.1.3
+    validator_count: 32
+    count: 3
+    # Fulu/PeerDAS: at least one supernode (or 128+ validators on a node) is
+    # required; marking the participant makes all replicas supernodes.
+    supernode: true
+    el_extra_params:
+      - "--experimental.binary-tree"
+      # Devnet-only: widen the RPC namespace allowlist for test tooling.
+      - "--http.api=eth,net,web3,debug,admin,txpool"
+
+ethereum_metrics_exporter_enabled: true
+
+network_params:
+  seconds_per_slot: 3
+  # CRITICAL for the binary-tree flag: a merged-at-genesis beacon chain embeds
+  # the EL genesis block hash computed by the genesis GENERATOR, which cannot
+  # know the PBT commitment — the CL would forever demand the unflagged (MPT)
+  # genesis hash and the network wedges at slot 0. Starting pre-merge makes
+  # the merge happen via TTD=0 at epoch 1, where the CL discovers the terminal
+  # block (the flagged EL genesis) from the EL itself at runtime.
+  # One-epoch stagger per fork; Fulu by epoch 5 (~8 min at 3s slots).
+  # Tested alternatives: stacking ALL forks at epoch 1 does NOT work — the
+  # merge-transition payload then crosses five fork boundaries in one block
+  # (Fulu payload on a frontier genesis) and gets rejected as INVALID at
+  # import (untriaged; likely an exotic transition edge in EL validation).
+  # The stagger keeps every boundary a single fork step.
+  altair_fork_epoch: 0
+  bellatrix_fork_epoch: 1
+  capella_fork_epoch: 2
+  deneb_fork_epoch: 3
+  electra_fork_epoch: 4
+  fulu_fork_epoch: 5
+
+additional_services:
+  - dora
+  - spamoor
+
+spamoor_params:
+  spammers:
+    # Gentle EOA-transfer load: enough to exercise per-block PBT commitment
+    # and account creation without ballooning the re-embedded state.
+    - scenario: eoatx
+      config:
+        throughput: 20
