@@ -18,7 +18,7 @@ use ethrex_common::{
     Address, H160, H256, U256,
     types::{
         Block, BlockHeader, DEFAULT_BUILDER_GAS_CEIL, EIP1559Transaction, ELASTICITY_MULTIPLIER,
-        Genesis, GenesisAccount, Transaction, TxKind,
+        Genesis, GenesisAccount, PbtAccount, Transaction, TxKind,
     },
 };
 use ethrex_l2_rpc::signer::{LocalSigner, Signable, Signer};
@@ -35,6 +35,9 @@ const TEST_MAX_FEE_PER_GAS: u64 = 10_000_000_000;
 /// `STATE_BYTES_PER_NEW_ACCOUNT (120) * cost_per_state_byte (1530) = 183_600`
 /// gas on top of execution gas, spilled from the tx gas since small gas
 /// limits carry no reservoir. 100k made every transfer here fail-in-block.
+/// 400k gives comfortable headroom over that ~183.6k new-account floor and
+/// over the storage-zeroing test's SSTORE storage-set state gas
+/// (`64 * 1530 = 97_920`) plus execution gas.
 const TEST_GAS_LIMIT: u64 = 400_000;
 
 fn test_secret_key() -> SecretKey {
@@ -483,7 +486,7 @@ async fn binary_tree_seeded_snapshot_gates_import_of_next_block() {
     let mut wrong = (*correct).clone();
     wrong.accounts.insert(
         Address::from_low_u64_be(0xDEAD),
-        ethrex_common::types::PbtAccount {
+        PbtAccount {
             balance: U256::one(),
             ..Default::default()
         },
@@ -816,3 +819,21 @@ async fn binary_tree_restart_loses_registries_and_replay_recovers() {
         "block-3 header must commit to the stored snapshot's binary root"
     );
 }
+
+// Deliberate coverage skips (recorded per the state-commitment plan):
+//
+// - Off-flag regression test: SKIPPED. Flag-off invariance is already proven
+//   by the full flag-off integration suite (every non-binary-tree test runs
+//   with the flag off), and the targeted MPT-vs-PBT divergence assert inside
+//   `binary_tree_chain_of_three_commits_binary_roots` builds the identical
+//   block on the unflagged `l1-bal.json` twin and requires the committed
+//   roots to differ. A dedicated twin-chain test would be redundant.
+//
+// - Balance-cap (>= 2^128) integration test: SKIPPED. The cap is unit-covered
+//   by `pbt_state.rs::balance_must_fit_the_basic_data_field`, and it is
+//   unconstructible via valid execution here: the fixture's total genesis
+//   supply (~1.95e29 wei) is ~9 orders of magnitude below 2^128, so no chain
+//   of valid transactions can credit any account past the cap. A
+//   malformed-genesis construction would only exercise the documented
+//   `Genesis::compute_state_root` expect panic (a genesis-validation concern,
+//   not the block-import cap surfacing).
