@@ -222,6 +222,15 @@ pub struct Store {
     /// Snapshots are never evicted in this phase.
     pbt_states: Arc<Mutex<rustc_hash::FxHashMap<BlockHash, Arc<PbtState>>>>,
 
+    /// Experimental EIP-8297 companion to `pbt_states`: the MPT root under
+    /// which each block's state is persisted, keyed by block hash. Under the
+    /// flag, `header.state_root` commits to the binary-tree root while the
+    /// MPT remains the lookup structure — but MPT tries are addressed by
+    /// their root, which the header no longer carries, so it must be
+    /// recorded out of band (in-memory, same lifecycle as `pbt_states`).
+    /// Unused (empty) when the flag is off.
+    mpt_lookup_roots: Arc<Mutex<rustc_hash::FxHashMap<BlockHash, H256>>>,
+
     /// Serializes concurrent `forkchoice_update` callers so that the cache
     /// update and the DB write transaction remain mutually ordered.
     fcu_lock: Arc<tokio::sync::Mutex<()>>,
@@ -1642,6 +1651,11 @@ impl Store {
     /// root. Used by `apply_updates` for both the live and full-sync paths (which
     /// share the single persist worker).
     fn batch_state_roots(&self, update_batch: &UpdateBatch) -> Result<(H256, H256), StoreError> {
+        // Both roots address MPT trie layers, so under the experimental
+        // binary-tree flag they must be resolved through the lookup registry
+        // (the headers commit to binary-tree roots there). The last block's
+        // registry entry is recorded by `Blockchain::store_block` before the
+        // update batch is handed over.
         let parent_state_root = self
             .get_block_header_by_hash(
                 update_batch
@@ -1651,14 +1665,16 @@ impl Store {
                     .header
                     .parent_hash,
             )?
-            .map(|header| header.state_root)
+            .map(|header| self.mpt_state_root_for_header(&header))
+            .transpose()?
             .unwrap_or_default();
-        let last_state_root = update_batch
-            .blocks
-            .last()
-            .ok_or(StoreError::UpdateBatchNoBlocks)?
-            .header
-            .state_root;
+        let last_state_root = self.mpt_state_root_for_header(
+            &update_batch
+                .blocks
+                .last()
+                .ok_or(StoreError::UpdateBatchNoBlocks)?
+                .header,
+        )?;
         Ok((parent_state_root, last_state_root))
     }
 
@@ -1882,6 +1898,7 @@ impl Store {
             account_code_cache: Arc::new(Mutex::new(CodeCache::default())),
             code_metadata_cache: Arc::new(Mutex::new(rustc_hash::FxHashMap::default())),
             pbt_states: Arc::new(Mutex::new(rustc_hash::FxHashMap::default())),
+            mpt_lookup_roots: Arc::new(Mutex::new(rustc_hash::FxHashMap::default())),
             fcu_lock: Arc::new(tokio::sync::Mutex::new(())),
             safe_commit_root,
             background_threads: Default::default(),
@@ -2585,6 +2602,54 @@ impl Store {
         Ok(())
     }
 
+    /// Records the MPT root under which `block_hash`'s state is persisted.
+    /// Only meaningful under `ChainConfig::enable_binary_tree_at_genesis`,
+    /// where the header's `state_root` commits to the binary-tree root and
+    /// can no longer address the MPT lookup structure. Written at genesis
+    /// seeding and on every block import.
+    pub fn put_mpt_lookup_root(
+        &self,
+        block_hash: BlockHash,
+        state_root: H256,
+    ) -> Result<(), StoreError> {
+        self.mpt_lookup_roots
+            .lock()
+            .map_err(|_| StoreError::LockError)?
+            .insert(block_hash, state_root);
+        Ok(())
+    }
+
+    /// Returns the recorded MPT lookup root for `block_hash`, if any.
+    /// See [`Store::put_mpt_lookup_root`].
+    pub fn get_mpt_lookup_root(&self, block_hash: BlockHash) -> Result<Option<H256>, StoreError> {
+        Ok(self
+            .mpt_lookup_roots
+            .lock()
+            .map_err(|_| StoreError::LockError)?
+            .get(&block_hash)
+            .copied())
+    }
+
+    /// Resolves the root under which `header`'s MPT state is stored: the
+    /// header's own `state_root` normally, or the side-registry entry under
+    /// the experimental EIP-8297 flag (where the header commits to the
+    /// binary-tree root instead). Errors under the flag when no entry was
+    /// recorded — the MPT for that block is unaddressable, which means the
+    /// block was never imported through this store instance.
+    pub fn mpt_state_root_for_header(&self, header: &BlockHeader) -> Result<H256, StoreError> {
+        if !self.get_chain_config().enable_binary_tree_at_genesis {
+            return Ok(header.state_root);
+        }
+        let block_hash = header.hash();
+        self.get_mpt_lookup_root(block_hash)?.ok_or_else(|| {
+            StoreError::Custom(format!(
+                "missing MPT lookup root for block {block_hash:#x} (experimental binary-tree \
+                 commitment, in-memory only) — the block was not imported through this store; \
+                 restart requires re-import from genesis"
+            ))
+        })
+    }
+
     pub async fn add_initial_state(&mut self, genesis: Genesis) -> Result<(), StoreError> {
         self.add_initial_state_inner(genesis, false).await
     }
@@ -2686,8 +2751,11 @@ impl Store {
         let genesis_state_root = self.setup_genesis_state_trie(genesis.alloc).await?;
         // Under the binary-tree flag the header commits to the binary-tree
         // root (verified above), not the MPT root, so this only holds with
-        // the flag off.
-        if !genesis.config.enable_binary_tree_at_genesis {
+        // the flag off — and the MPT root must be recorded out of band so
+        // the lookup structure stays addressable.
+        if genesis.config.enable_binary_tree_at_genesis {
+            self.put_mpt_lookup_root(genesis_hash, genesis_state_root)?;
+        } else {
             debug_assert_eq!(genesis_state_root, genesis_block.header.state_root);
         }
 
@@ -2932,7 +3000,11 @@ impl Store {
         let Some(header) = self.get_block_header_by_hash(block_hash)? else {
             return Ok(None);
         };
-        Ok(Some(self.open_state_trie(header.state_root)?))
+        // Resolves to `header.state_root` unless the experimental binary-tree
+        // flag redirects the MPT lookup through the side registry.
+        Ok(Some(self.open_state_trie(
+            self.mpt_state_root_for_header(&header)?,
+        )?))
     }
 
     /// Obtain the storage trie for the given account on the given block

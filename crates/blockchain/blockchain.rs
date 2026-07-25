@@ -69,7 +69,7 @@ use ethrex_common::types::block_execution_witness::ExecutionWitness;
 use ethrex_common::types::fee_config::FeeConfig;
 use ethrex_common::types::{
     AccountInfo, AccountState, AccountUpdate, BalSynthesisItem, Block, BlockHash, BlockHeader,
-    BlockNumber, ChainConfig, Code, Receipt, Transaction, WrappedEIP4844Transaction,
+    BlockNumber, ChainConfig, Code, PbtState, Receipt, Transaction, WrappedEIP4844Transaction,
     synthesize_bal_updates, validate_block_body,
 };
 use ethrex_common::types::{EIP7702_DELEGATED_CODE_LEN, is_eip7702_delegation};
@@ -591,6 +591,13 @@ impl Blockchain {
 
         let chain_config = self.storage.get_chain_config();
 
+        // Whether the merkleizer must accumulate the raw per-block
+        // `AccountUpdate`s. Needed for witness generation, and under the
+        // experimental EIP-8297 flag for `store_block`'s binary-trie
+        // commitment (which extends the parent snapshot with exactly these
+        // updates). Forces the streaming merkleizer below.
+        let collect_updates = collect_witness || chain_config.enable_binary_tree_at_genesis;
+
         // Validate the block pre-execution
         validate_block_pre_execution(block, parent_header, &chain_config, ELASTICITY_MULTIPLIER)?;
         self.validate_l1_transaction_types(block)?;
@@ -652,8 +659,10 @@ impl Blockchain {
         // executor (see `bal_parallel_exec_enabled` below) streams per-tx
         // updates over the channel, which only the streaming merkleizer
         // consumes — the synthesized path would leave the receiver dropped.
+        // Update accumulation (`collect_updates`) forces streaming as well:
+        // only the streaming merkleizer accumulates raw `AccountUpdate`s.
         let optimistic_updates: Option<FxHashMap<Address, BalSynthesisItem>> =
-            if self.options.bal_parallel_trie_enabled && !collect_witness {
+            if self.options.bal_parallel_trie_enabled && !collect_updates {
                 bal.as_deref().map(synthesize_bal_updates)
             } else {
                 None
@@ -924,7 +933,7 @@ impl Blockchain {
                                 parent_header_ref,
                                 queue_length_ref,
                                 max_queue_length_ref,
-                                collect_witness,
+                                collect_updates,
                             )?,
                         };
                         let merkle_end_instant = Instant::now();
@@ -965,9 +974,10 @@ impl Blockchain {
             merkleization_result?;
         let (execution_result, produced_bal, exec_end_instant) = execution_result?;
 
-        // Witness collection forces the streaming merkleizer (synthesized
-        // updates are disabled above), so the streaming witness is the only
-        // possible source of accumulated updates.
+        // Update accumulation (witness collection or the binary-tree flag)
+        // forces the streaming merkleizer (synthesized updates are disabled
+        // above), so the streaming merkleizer is the only possible source of
+        // accumulated updates.
         let accumulated_updates = streaming_witness;
 
         let exec_merkle_end_instant = Instant::now();
@@ -1003,9 +1013,9 @@ impl Blockchain {
         parent_header: &BlockHeader,
         queue_length: &AtomicUsize,
         max_queue_length: &mut usize,
-        collect_witness: bool,
+        collect_updates: bool,
     ) -> Result<(AccountUpdatesList, Option<Vec<AccountUpdate>>), StoreError> {
-        let parent_state_root = parent_header.state_root;
+        let parent_state_root = self.storage.mpt_state_root_for_header(parent_header)?;
 
         // Create 16 worker channels (crossbeam for select! support)
         let mut workers_tx = Vec::with_capacity(16);
@@ -1076,7 +1086,7 @@ impl Blockchain {
             let mut has_storage: FxHashSet<H256> = Default::default();
 
             let mut accumulator: Option<FxHashMap<Address, AccountUpdate>> =
-                collect_witness.then(FxHashMap::default);
+                collect_updates.then(FxHashMap::default);
 
             for updates in rx {
                 let current_length = queue_length.fetch_sub(1, Ordering::Acquire);
@@ -1236,7 +1246,7 @@ impl Blockchain {
         // being handled by Stage B. When hot_indices is empty the Stage B path
         // is unchanged.
         const STORAGE_SHARD_THRESHOLD: usize = 2048;
-        let parent_state_root = parent_header.state_root;
+        let parent_state_root = self.storage.mpt_state_root_for_header(parent_header)?;
 
         // Build code updates and work items with pre-hashed addresses from the
         // pre-synthesized map. No Stage A drain needed: the synthesis happened
@@ -1540,7 +1550,12 @@ impl Blockchain {
         prefix: Option<H256>,
         root: BranchNode,
     ) -> Result<Option<Node>, StoreError> {
-        collapse_root_node(&self.storage, parent_header.state_root, prefix, root)
+        collapse_root_node(
+            &self.storage,
+            self.storage.mpt_state_root_for_header(parent_header)?,
+            prefix,
+            root,
+        )
     }
 
     /// Executes a block from a given vm instance an does not clear its state
@@ -1779,7 +1794,12 @@ impl Blockchain {
             // We cannot ensure that the users of this function have the necessary
             // state stored, so in order for it to not assume anything, we update
             // the storage with the new state after re-execution
-            self.store_block(block.clone(), account_updates_list, execution_result)?;
+            self.store_block(
+                block.clone(),
+                &account_updates,
+                account_updates_list,
+                execution_result,
+            )?;
 
             for (address, (witness, _storage_trie)) in storage_tries_after_update {
                 let mut witness = witness.lock().map_err(|_| {
@@ -1922,7 +1942,7 @@ impl Blockchain {
 
     pub fn generate_witness_from_account_updates(
         &self,
-        account_updates: Vec<AccountUpdate>,
+        account_updates: &[AccountUpdate],
         block: &Block,
         parent_header: BlockHeader,
         logger: &DatabaseLogger,
@@ -1948,7 +1968,7 @@ impl Blockchain {
 
         let mut codes = Vec::new();
 
-        for account_update in &account_updates {
+        for account_update in account_updates {
             touched_account_storage_slots.insert(
                 account_update.address,
                 account_update
@@ -2034,7 +2054,7 @@ impl Blockchain {
         let (storage_tries_after_update, _account_updates_list) =
             self.storage.apply_account_updates_from_trie_with_witness(
                 trie,
-                &account_updates,
+                account_updates,
                 used_storage_tries,
             )?;
 
@@ -2163,11 +2183,35 @@ impl Blockchain {
     pub fn store_block(
         &self,
         block: Block,
+        account_updates: &[AccountUpdate],
         account_updates_list: AccountUpdatesList,
         execution_result: BlockExecutionResult,
     ) -> Result<(), ChainError> {
-        // Check state root matches the one in block header
-        validate_state_root(&block.header, account_updates_list.state_trie_hash)?;
+        if self
+            .storage
+            .get_chain_config()
+            .enable_binary_tree_at_genesis
+        {
+            // Experimental EIP-8297: the header commits to the binary-trie
+            // root. Extend the parent's snapshot with this block's raw
+            // account updates, validate the resulting root against the
+            // header (this REPLACES the MPT-root-vs-header check), and store
+            // the new snapshot under the block's hash. The MPT updates are
+            // still persisted below as the lookup structure, addressed via
+            // the side registry (`put_mpt_lookup_root`) since the header no
+            // longer carries the MPT root.
+            let parent = self.require_pbt_state(block.header.parent_hash)?;
+            let mut pbt_state = (*parent).clone();
+            pbt_state.apply_account_updates(account_updates);
+            let binary_root = pbt_state.compute_root().map_err(StoreError::from)?;
+            validate_state_root(&block.header, binary_root)?;
+            self.storage.put_pbt_state(block.hash(), pbt_state)?;
+            self.storage
+                .put_mpt_lookup_root(block.hash(), account_updates_list.state_trie_hash)?;
+        } else {
+            // Check state root matches the one in block header
+            validate_state_root(&block.header, account_updates_list.state_trie_hash)?;
+        }
 
         let update_batch = UpdateBatch {
             account_updates: account_updates_list.state_updates,
@@ -2181,6 +2225,26 @@ impl Blockchain {
         self.storage
             .store_block_updates(update_batch)
             .map_err(|e| e.into())
+    }
+
+    /// Fetches the experimental EIP-8297 binary-tree snapshot for
+    /// `parent_hash`, erroring when it is missing. Shared by block import
+    /// (`store_block`) and payload building (`finalize_payload`) so both
+    /// fail the same way.
+    pub(crate) fn require_pbt_state(
+        &self,
+        parent_hash: BlockHash,
+    ) -> Result<Arc<PbtState>, ChainError> {
+        self.storage
+            .get_pbt_state(parent_hash)
+            .map_err(ChainError::StoreError)?
+            .ok_or_else(|| {
+                ChainError::Custom(format!(
+                    "missing PbtState for parent {parent_hash:#x} (experimental binary-tree \
+                     commitment, in-memory only) — restart requires re-import from genesis, or \
+                     seed a snapshot via put_pbt_state"
+                ))
+            })
     }
 
     pub fn add_block(&self, block: Block) -> Result<(), ChainError> {
@@ -2202,7 +2266,7 @@ impl Blockchain {
         );
 
         let merkleized = Instant::now();
-        let result = self.store_block(block, account_updates_list, res);
+        let result = self.store_block(block, &updates, account_updates_list, res);
         let stored = Instant::now();
 
         if self.options.perf_logs_enabled {
@@ -2338,7 +2402,7 @@ impl Blockchain {
 
         let mut witness = None;
         if let Some(logger) = logger
-            && let Some(account_updates) = accumulated_updates
+            && let Some(account_updates) = accumulated_updates.as_deref()
         {
             let block_hash = block.hash();
             let generated_witness = self.generate_witness_from_account_updates(
@@ -2374,7 +2438,16 @@ impl Blockchain {
             warn!("Failed to store block access list for block {block_hash}: {err}");
         }
 
-        let result = self.store_block(block, account_updates_list, res);
+        // `accumulated_updates` is only populated when the merkleizer was told
+        // to accumulate (witness collection or the binary-tree flag); with the
+        // flag on it is always Some, and with the flag off `store_block`
+        // ignores the slice, so the empty fallback is never observed.
+        let result = self.store_block(
+            block,
+            accumulated_updates.as_deref().unwrap_or(&[]),
+            account_updates_list,
+            res,
+        );
 
         let stored = Instant::now();
 
@@ -2682,6 +2755,45 @@ impl Blockchain {
         };
 
         let chain_config: ChainConfig = self.storage.get_chain_config();
+
+        // Experimental EIP-8297: the batch path executes the whole range and
+        // merkleizes ONCE, validating only the last header — it cannot
+        // produce the per-block `PbtState` snapshots (and per-block header
+        // checks) the binary-tree commitment requires. Fall back to the
+        // single-block path per block; the flag is experimental, so the
+        // batch throughput loss is acceptable.
+        if chain_config.enable_binary_tree_at_genesis {
+            for (i, block) in blocks.into_iter().enumerate() {
+                if cancellation_token.is_cancelled() {
+                    info!("Received shutdown signal, aborting");
+                    return Err((ChainError::Custom(String::from("shutdown signal")), None));
+                }
+                let block_hash = block.hash();
+                let bal_commitment = block.header.block_access_list_hash;
+                self.add_block(block).map_err(|err| {
+                    (
+                        err,
+                        Some(BatchBlockProcessingFailure {
+                            failed_block_hash: block_hash,
+                            last_valid_hash,
+                        }),
+                    )
+                })?;
+                // Preserve the batch path's EIP-8159 behavior: persist the
+                // peer-supplied BAL when it matches the header commitment.
+                if let Some(bal) = bals.get(i).and_then(|b| b.as_ref())
+                    && bal.matches_commitment(bal_commitment, &NativeCrypto)
+                    && let Err(err) = self.storage.store_block_access_list(block_hash, bal)
+                {
+                    warn!(
+                        "Failed to persist block access list for {block_hash} during batch sync: {err}"
+                    );
+                }
+                last_valid_hash = block_hash;
+                tokio::task::yield_now().await;
+            }
+            return Ok(());
+        }
 
         // Cache block hashes for the full batch so we can access them during
         // execution without having to store the blocks beforehand.

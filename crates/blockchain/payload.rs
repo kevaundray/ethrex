@@ -987,7 +987,19 @@ impl Blockchain {
             .apply_account_updates_batch(context.parent_hash(), &account_updates)?
             .ok_or(ChainError::ParentStateNotFound)?;
 
-        let state_root = ret_acount_updates_list.state_trie_hash;
+        let state_root = if context.chain_config().enable_binary_tree_at_genesis {
+            // Experimental EIP-8297: the header must commit to the
+            // binary-trie root, not the MPT root. Extend the parent's
+            // snapshot with this payload's updates; the snapshot itself is
+            // NOT stored here — import does that when the block comes back
+            // through `store_block`.
+            let parent = self.require_pbt_state(context.parent_hash())?;
+            let mut pbt_state = (*parent).clone();
+            pbt_state.apply_account_updates(&account_updates);
+            pbt_state.compute_root().map_err(StoreError::from)?
+        } else {
+            ret_acount_updates_list.state_trie_hash
+        };
 
         context.payload.header.state_root = state_root;
         context.payload.header.transactions_root =

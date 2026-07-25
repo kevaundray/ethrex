@@ -210,8 +210,12 @@ impl BlockProducer {
         // Save the header for newHeads notifications before block is moved into store_block.
         let block_header = block.header.clone();
         self.store_fee_config_by_block(block.header.number).await?;
-        self.blockchain
-            .store_block(block, account_updates_list, execution_result)?;
+        self.blockchain.store_block(
+            block,
+            &account_updates,
+            account_updates_list,
+            execution_result,
+        )?;
         info!(
             "Stored new block {:x}, transaction_count {}",
             block_hash, transactions_count
