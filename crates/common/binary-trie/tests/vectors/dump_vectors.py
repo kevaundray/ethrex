@@ -180,6 +180,90 @@ basic_data_cases = [
     },
 ]
 
+# --- Flat-state embedding vectors (state_pbt.py) ---
+from ethereum.state import Account, BlockDiff
+from ethereum.state_pbt import (
+    State as PbtSpecState,
+    apply_changes_to_state,
+    set_account,
+    set_storage,
+    state_root,
+    store_code,
+)
+
+ADDR_EOA = Bytes20(bytes.fromhex("1000000000000000000000000000000000000001"))
+ADDR_CONTRACT = Bytes20(
+    bytes.fromhex("2000000000000000000000000000000000000002")
+)
+# >127 chunks so content-addressed overflow chunks are exercised:
+# 4030 bytes = 130 chunks of 31 bytes; PUSH data crosses chunk boundaries.
+CONTRACT_CODE = Bytes(bytes([0x60, 0xAA, 0x01] * 1343 + [0x00]))
+
+spec_state = PbtSpecState()
+code_hash = store_code(spec_state, CONTRACT_CODE)
+set_account(
+    spec_state,
+    ADDR_EOA,
+    Account(nonce=Uint(7), balance=U256(10**18), code_hash=keccak256(b"")),
+)
+set_account(
+    spec_state,
+    ADDR_CONTRACT,
+    Account(nonce=Uint(1), balance=U256(2**127 - 1), code_hash=code_hash),
+)
+for slot, val in [(0, 0xDEAD), (63, 1), (64, 2), (300, 3)]:
+    set_storage(
+        spec_state,
+        ADDR_CONTRACT,
+        Bytes32(int(slot).to_bytes(32, "big")),
+        U256(val),
+    )
+
+pre_root = state_root(spec_state)
+
+diff1 = BlockDiff(
+    account_changes={
+        ADDR_EOA: Account(
+            nonce=Uint(8), balance=U256(2 * 10**18), code_hash=keccak256(b"")
+        )
+    },
+    storage_changes={
+        ADDR_CONTRACT: {
+            Bytes32((0).to_bytes(32, "big")): U256(0),
+            Bytes32((64).to_bytes(32, "big")): U256(9),
+        }
+    },
+    code_changes={},
+)
+apply_changes_to_state(spec_state, diff1)
+post_diff1_root = state_root(spec_state)
+
+diff2 = BlockDiff(account_changes={ADDR_CONTRACT: None})
+apply_changes_to_state(spec_state, diff2)
+post_delete_root = state_root(spec_state)
+
+pbt_state_cases = {
+    "eoa_address": hx(ADDR_EOA),
+    "contract_address": hx(ADDR_CONTRACT),
+    "contract_code": hx(CONTRACT_CODE),
+    "pre": {
+        "eoa": {"nonce": 7, "balance": hex(10**18)},
+        "contract": {
+            "nonce": 1,
+            "balance": hex(2**127 - 1),
+            "storage": {
+                "0": hex(0xDEAD),
+                "63": "0x1",
+                "64": "0x2",
+                "300": "0x3",
+            },
+        },
+        "root": hx(pre_root),
+    },
+    "post_diff1_root": hx(post_diff1_root),
+    "post_delete_contract_root": hx(post_delete_root),
+}
+
 json.dump(
     {
         "source": "ethereum/execution-specs projects/binary-trie",
@@ -190,6 +274,7 @@ json.dump(
         "embedding": embedding_cases,
         "chunkify_code": chunkify_cases,
         "encode_basic_data": basic_data_cases,
+        "pbt_state": pbt_state_cases,
     },
     sys.stdout,
     indent=2,
