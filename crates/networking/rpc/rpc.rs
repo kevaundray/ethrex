@@ -1817,6 +1817,7 @@ mod tests {
                             "blobSchedule": blob_schedule,
                             "depositContractAddress": H160::from_str("0x00000000219ab540356cbb839cbe05303d7705fa").unwrap(),
                             "enableVerkleAtGenesis": false,
+                            "enableBinaryTreeAtGenesis": false,
                         },
                         "head": default_hash,
                     }

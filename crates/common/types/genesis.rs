@@ -296,6 +296,15 @@ pub struct ChainConfig {
 
     #[serde(default)]
     pub enable_verkle_at_genesis: bool,
+
+    /// Experimental EIP-8297 state commitment: when set, genesis and block
+    /// state roots are Partitioned-Binary-Tree roots instead of MPT roots.
+    /// Activation is genesis-only (transition machinery is a later phase).
+    /// Does not participate in fork identity: nodes disagreeing on this flag
+    /// already diverge at the genesis hash, since the genesis state root
+    /// differs.
+    #[serde(default)]
+    pub enable_binary_tree_at_genesis: bool,
 }
 
 lazy_static::lazy_static! {
@@ -873,6 +882,25 @@ mod tests {
             err.to_string().contains("finite, non-negative"),
             "error should name the sign/finiteness cause, got: {err}"
         );
+    }
+
+    #[test]
+    fn test_enable_binary_tree_at_genesis_flag() {
+        let config = ChainConfig::default();
+        assert!(!config.enable_binary_tree_at_genesis);
+
+        let dca = r#""depositContractAddress":"0x00000000219ab540356cbb839cbe05303d7705fa""#;
+
+        let parsed: ChainConfig = serde_json::from_str(&format!(
+            r#"{{"chainId":1,"enableBinaryTreeAtGenesis":true,{dca}}}"#
+        ))
+        .expect("config with enableBinaryTreeAtGenesis should parse");
+        assert!(parsed.enable_binary_tree_at_genesis);
+
+        // absent from JSON -> defaults to false
+        let parsed: ChainConfig = serde_json::from_str(&format!(r#"{{"chainId":1,{dca}}}"#))
+            .expect("config without enableBinaryTreeAtGenesis should parse");
+        assert!(!parsed.enable_binary_tree_at_genesis);
     }
 
     #[test]
