@@ -219,6 +219,7 @@ pub struct Store {
     /// Experimental EIP-8297 binary-tree state snapshots, keyed by block
     /// hash (`ChainConfig::enable_binary_tree_at_genesis`). In-memory only:
     /// seeded at genesis for now; block-import maintenance lands separately.
+    /// Snapshots are never evicted in this phase.
     pbt_states: Arc<Mutex<rustc_hash::FxHashMap<BlockHash, Arc<PbtState>>>>,
 
     /// Serializes concurrent `forkchoice_update` callers so that the cache
@@ -2556,26 +2557,32 @@ impl Store {
     /// Returns the experimental EIP-8297 binary-tree state snapshot for
     /// `block_hash`, if one has been stored. Populated at genesis when
     /// `ChainConfig::enable_binary_tree_at_genesis` is set.
-    pub fn get_pbt_state(&self, block_hash: BlockHash) -> Option<Arc<PbtState>> {
-        self.pbt_states
+    pub fn get_pbt_state(
+        &self,
+        block_hash: BlockHash,
+    ) -> Result<Option<Arc<PbtState>>, StoreError> {
+        Ok(self
+            .pbt_states
             .lock()
-            .expect("pbt_states mutex poisoned")
+            .map_err(|_| StoreError::LockError)?
             .get(&block_hash)
-            .cloned()
+            .cloned())
     }
 
     /// Stores the experimental EIP-8297 binary-tree state snapshot for
     /// `block_hash`.
     ///
     /// Besides the internal genesis seeding, this is also the offline-seeding
-    /// API for nodes that cannot replay from genesis: the snapshot must equal
-    /// what replay would have computed — it is self-verifying against the
-    /// fork-active header's `state_root`.
-    pub fn put_pbt_state(&self, block_hash: BlockHash, state: PbtState) {
+    /// API for nodes that cannot replay from genesis. Nothing is validated at
+    /// insertion: a snapshot that differs from what replay would have
+    /// computed surfaces as a state-root mismatch on the next imported block,
+    /// so seeders must supply the exact replay-equivalent state.
+    pub fn put_pbt_state(&self, block_hash: BlockHash, state: PbtState) -> Result<(), StoreError> {
         self.pbt_states
             .lock()
-            .expect("pbt_states mutex poisoned")
+            .map_err(|_| StoreError::LockError)?
             .insert(block_hash, Arc::new(state));
+        Ok(())
     }
 
     pub async fn add_initial_state(&mut self, genesis: Genesis) -> Result<(), StoreError> {
@@ -2661,13 +2668,17 @@ impl Store {
         if genesis.config.enable_binary_tree_at_genesis {
             let pbt_state = PbtState::from_genesis_alloc(&genesis.alloc);
             let pbt_root = pbt_state.compute_root()?;
+            // The header root comes from this same from_genesis_alloc +
+            // compute_root pipeline, so this is a funnel-consistency guard
+            // against the two paths diverging in future edits, not
+            // independent verification.
             if pbt_root != genesis_block.header.state_root {
                 return Err(StoreError::Custom(format!(
                     "binary-tree genesis root mismatch: computed {pbt_root:#x} but the genesis header commits to {:#x}",
                     genesis_block.header.state_root
                 )));
             }
-            self.put_pbt_state(genesis_hash, pbt_state);
+            self.put_pbt_state(genesis_hash, pbt_state)?;
         }
 
         // Store genesis accounts
@@ -4704,6 +4715,7 @@ mod pbt_genesis_tests {
 
         let state = store
             .get_pbt_state(genesis_hash)
+            .expect("registry lookup")
             .expect("flagged genesis must seed a binary-tree snapshot");
         assert_eq!(
             state.compute_root().expect("snapshot root"),
@@ -4727,7 +4739,10 @@ mod pbt_genesis_tests {
             .expect("unflagged genesis must initialize");
 
         assert!(
-            store.get_pbt_state(genesis_hash).is_none(),
+            store
+                .get_pbt_state(genesis_hash)
+                .expect("registry lookup")
+                .is_none(),
             "no snapshot may be seeded when the flag is off"
         );
     }
@@ -4754,6 +4769,7 @@ mod pbt_genesis_tests {
 
         let state = store
             .get_pbt_state(genesis_hash)
+            .expect("registry lookup")
             .expect("fixture genesis must seed a binary-tree snapshot");
         assert_eq!(
             state.compute_root().expect("snapshot root"),
