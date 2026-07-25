@@ -396,6 +396,15 @@ async fn handle_forkchoice(
                         InvalidForkChoice::InvalidAncestor(last_valid_hash).to_string(),
                     ))
                 }
+                InvalidForkChoice::InvalidHeadHash => {
+                    // Engine API (Paris, forkchoiceUpdated rule 8): an unknown
+                    // head MUST yield SYNCING, never INVALID. The zero head is
+                    // the pre-merge "no execution head yet" that consensus
+                    // clients send before the terminal block; answering INVALID
+                    // poisons their fork choice and wedges the merge. There is
+                    // nothing to sync toward, so no sync cycle is started.
+                    ForkChoiceResponse::from(PayloadStatus::syncing())
+                }
                 reason => {
                     warn!(
                         "Invalid fork choice payload. Reason: {}",

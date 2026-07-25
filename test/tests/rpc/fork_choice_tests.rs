@@ -390,3 +390,44 @@ async fn forkchoice_updated_v3_rejects_amsterdam_payload_attributes() {
 
     assert!(matches!(err, ethrex_rpc::utils::RpcErr::UnsupportedFork(_)));
 }
+
+// Engine API (Paris §engine_forkchoiceUpdatedV1, rule 8): a head hash that
+// references an unknown payload MUST be answered with SYNCING, never INVALID.
+// The zero head hash is the definitional unknown head — consensus clients
+// send it pre-merge (their beacon state has no execution head yet), and an
+// INVALID response wedges them: they mark their (empty) head invalid and
+// never drive the merge. Regression for the pre-merge devnet wedge observed
+// with laddered kurtosis configs.
+#[tokio::test]
+async fn fcu_with_zero_head_hash_returns_syncing_not_invalid() {
+    let store = test_store().await;
+    let body = r#"{
+        "jsonrpc": "2.0",
+        "method": "engine_forkchoiceUpdatedV3",
+        "params": [
+            {
+                "headBlockHash": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                "safeBlockHash": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                "finalizedBlockHash": "0x0000000000000000000000000000000000000000000000000000000000000000"
+            },
+            null
+        ],
+        "id": 1
+    }"#;
+    let request: RpcRequest = serde_json::from_str(body).expect("valid FCU request");
+
+    let context = default_context_with_storage(store).await;
+    let response = ForkChoiceUpdatedV3::call(&request, context)
+        .await
+        .expect("FCU with zero head must not be an RPC-level error");
+
+    assert_eq!(
+        response["payloadStatus"]["status"], "SYNCING",
+        "zero (unknown) head hash must yield SYNCING per the engine API; got {:?}",
+        response["payloadStatus"]
+    );
+    assert!(
+        response["payloadId"].is_null(),
+        "no payload build may start without a known head"
+    );
+}
