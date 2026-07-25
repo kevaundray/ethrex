@@ -29,6 +29,8 @@ use ethrex_common::{
     },
 };
 use ethrex_l2_rpc::signer::{LocalSigner, Signable, Signer};
+#[cfg(feature = "rocksdb")]
+use ethrex_storage::DB_COMMIT_THRESHOLD;
 use ethrex_storage::{EngineType, Store};
 use secp256k1::SecretKey;
 
@@ -207,9 +209,9 @@ fn remove_test_db(path: &str) {
 #[cfg(feature = "rocksdb")]
 #[tokio::test]
 async fn forkchoice_flushes_committable_backlog_and_prunes_genesis() {
-    // Strictly greater than DB_COMMIT_THRESHOLD (128) so the canonical block at
-    // `head - 128` exists and is a committable layer.
-    const BLOCKS: u64 = 130;
+    // Strictly greater than DB_COMMIT_THRESHOLD so the canonical block at
+    // `head - DB_COMMIT_THRESHOLD` exists and is a committable layer.
+    const BLOCKS: u64 = DB_COMMIT_THRESHOLD as u64 + 2;
 
     let sk = test_secret_key();
     let sender = sender_from_key(&sk);

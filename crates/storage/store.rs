@@ -2760,6 +2760,14 @@ impl Store {
                         genesis_hash,
                         genesis_block.header.state_root,
                     )?;
+                    // Deterministic recomputation over verified input: this
+                    // branch only runs when header.hash() == genesis_hash,
+                    // which pins the alloc, and equivalence with the
+                    // fresh-init value is asserted by the rocksdb restart
+                    // test. No has_state_root guard: the genesis MPT layer is
+                    // legitimately pruned past DB_COMMIT_THRESHOLD — the
+                    // registry entry is an addressing record, not a liveness
+                    // claim.
                     self.put_mpt_lookup_root(genesis_hash, genesis.compute_mpt_state_root())?;
                 }
                 return Ok(());

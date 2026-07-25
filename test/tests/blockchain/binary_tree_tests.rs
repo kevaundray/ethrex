@@ -18,7 +18,7 @@ use ethrex_common::{
     Address, H160, H256, U256,
     types::{
         Block, BlockHeader, DEFAULT_BUILDER_GAS_CEIL, EIP1559Transaction, ELASTICITY_MULTIPLIER,
-        Genesis, GenesisAccount, PbtAccount, Transaction, TxKind,
+        Genesis, GenesisAccount, PbtAccount, Transaction, TxKind, Withdrawal,
     },
 };
 use ethrex_l2_rpc::signer::{LocalSigner, Signable, Signer};
@@ -851,6 +851,69 @@ async fn binary_tree_restart_loses_registries_and_replay_recovers() {
     );
 }
 
+/// Withdrawals are the one `AccountUpdate` source that bypasses transaction
+/// execution (a consensus-layer credit applied at payload finalization), so
+/// they must flow into the snapshot extension like any executed update: a
+/// block whose only state change beyond the fee-recipient touch is a
+/// non-empty withdrawal must validate on import, and the block's snapshot
+/// must hold the credited balance (amount is denominated in Gwei).
+#[tokio::test]
+async fn binary_tree_withdrawal_credits_recipient_in_snapshot() {
+    let sk = test_secret_key();
+    let sender = sender_from_key(&sk);
+    let (store, _chain_id) = setup_store_from_fixture("l1-binarytree.json", sender).await;
+    let blockchain = Blockchain::default_with_store(store.clone());
+    let genesis_header = store.get_block_header(0).unwrap().unwrap();
+
+    let recipient = Address::from_low_u64_be(0x81D0);
+    let amount_gwei = 1_000_000u64; // 0.001 ETH
+    // Same fixed args as `build_block`, but with a non-empty withdrawal list.
+    let args = BuildPayloadArgs {
+        parent: genesis_header.hash(),
+        timestamp: genesis_header.timestamp + 12,
+        fee_recipient: H160::zero(),
+        random: H256::zero(),
+        withdrawals: Some(vec![Withdrawal {
+            index: 0,
+            validator_index: 0,
+            address: recipient,
+            amount: amount_gwei,
+        }]),
+        beacon_root: Some(H256::zero()),
+        slot_number: Some(genesis_header.number + 1),
+        version: 1,
+        elasticity_multiplier: ELASTICITY_MULTIPLIER,
+        gas_ceil: DEFAULT_BUILDER_GAS_CEIL,
+    };
+    let payload = create_payload(&args, &store, Bytes::new()).unwrap();
+    let block = blockchain.build_payload(payload).unwrap().payload;
+    assert!(
+        block.body.transactions.is_empty(),
+        "the withdrawal must be the block's only state change"
+    );
+
+    blockchain
+        .add_block(block.clone())
+        .expect("withdrawal-only block should import under the binary-tree flag");
+
+    let snapshot = store
+        .get_pbt_state(block.hash())
+        .unwrap()
+        .expect("snapshot must exist for the withdrawal block");
+    assert_eq!(
+        snapshot.accounts.get(&recipient).map(|a| a.balance),
+        Some(U256::from(amount_gwei) * U256::from(1_000_000_000u64)),
+        "the snapshot must credit the withdrawal recipient (Gwei -> wei)"
+    );
+    assert_eq!(
+        block.header.state_root,
+        snapshot
+            .compute_root()
+            .expect("snapshot root computation should succeed"),
+        "the header must commit to the snapshot's binary root"
+    );
+}
+
 /// Flag-variant of `canonical_commit_gate_tests::forkchoice_flushes_committable_backlog_and_prunes_genesis`:
 /// the safe-commit gate compares against MPT layer roots, so under the flag
 /// it must resolve the target block's root through the side registry — the
@@ -867,9 +930,9 @@ async fn binary_tree_restart_loses_registries_and_replay_recovers() {
 #[cfg(feature = "rocksdb")]
 #[tokio::test]
 async fn binary_tree_forkchoice_flushes_backlog_through_mpt_lookup_roots() {
-    // Strictly greater than DB_COMMIT_THRESHOLD (128) so the canonical block
-    // at `head - 128` exists and is a committable layer.
-    const BLOCKS: u64 = 130;
+    // Strictly greater than DB_COMMIT_THRESHOLD so the canonical block at
+    // `head - DB_COMMIT_THRESHOLD` exists and is a committable layer.
+    const BLOCKS: u64 = ethrex_storage::DB_COMMIT_THRESHOLD as u64 + 2;
 
     let sk = test_secret_key();
     let sender = sender_from_key(&sk);
