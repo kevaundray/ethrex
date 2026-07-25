@@ -1,3 +1,4 @@
+use ethrex_common::types::PbtStateError;
 use ethrex_rlp::error::RLPDecodeError;
 use ethrex_trie::TrieError;
 use thiserror::Error;
@@ -16,6 +17,8 @@ pub enum StoreError {
     RLPDecode(#[from] RLPDecodeError),
     #[error(transparent)]
     Trie(#[from] TrieError),
+    #[error(transparent)]
+    PbtState(#[from] PbtStateError),
     #[error("missing store: is an execution DB being used instead?")]
     MissingStore,
     #[error("Could not open DB for reading")]

@@ -820,6 +820,15 @@ impl Genesis {
     }
 
     pub fn compute_state_root(&self) -> H256 {
+        // Experimental EIP-8297: under the flag the genesis commits to the
+        // binary-tree root instead of the MPT root. Genesis construction has
+        // no error channel; the only failure is an alloc that violates the
+        // binary-tree constraints, which is a malformed-genesis bug.
+        if self.config.enable_binary_tree_at_genesis {
+            return crate::types::PbtState::from_genesis_alloc(&self.alloc)
+                .compute_root()
+                .expect("genesis alloc must satisfy binary-tree constraints (balances < 2^128)");
+        }
         let iter = self.alloc.iter().map(|(addr, account)| {
             (
                 keccak_hash(addr).to_vec(),
@@ -901,6 +910,55 @@ mod tests {
         let parsed: ChainConfig = serde_json::from_str(&format!(r#"{{"chainId":1,{dca}}}"#))
             .expect("config without enableBinaryTreeAtGenesis should parse");
         assert!(!parsed.enable_binary_tree_at_genesis);
+    }
+
+    #[test]
+    fn binary_tree_flag_swaps_genesis_state_root_commitment() {
+        use crate::types::PbtState;
+
+        let mut alloc: BTreeMap<Address, GenesisAccount> = BTreeMap::new();
+        alloc.insert(
+            Address::from_low_u64_be(0xaa),
+            GenesisAccount {
+                code: Bytes::new(),
+                storage: BTreeMap::new(),
+                balance: U256::from(1_000_000u64),
+                nonce: 1,
+            },
+        );
+        let mut storage = BTreeMap::new();
+        storage.insert(U256::from(1), U256::from(7));
+        alloc.insert(
+            Address::from_low_u64_be(0xbb),
+            GenesisAccount {
+                code: Bytes::from_static(&[0x60, 0x01]),
+                storage,
+                balance: U256::from(2u64),
+                nonce: 0,
+            },
+        );
+
+        let mut genesis = Genesis {
+            alloc,
+            ..Default::default()
+        };
+
+        let mpt_root = genesis.compute_state_root();
+
+        genesis.config.enable_binary_tree_at_genesis = true;
+        let pbt_root = genesis.compute_state_root();
+
+        assert_eq!(
+            pbt_root,
+            PbtState::from_genesis_alloc(&genesis.alloc)
+                .compute_root()
+                .expect("test balances fit the 2^128 cap"),
+            "flagged genesis must commit to the binary-tree root"
+        );
+        assert_ne!(
+            pbt_root, mpt_root,
+            "binary-tree root must differ from the MPT root for the same alloc"
+        );
     }
 
     #[test]

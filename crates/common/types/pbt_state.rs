@@ -18,8 +18,10 @@ use ethrex_binary_trie::embedding::{
 };
 use ethrex_binary_trie::trie::rebuild::{Entries, rebuild_root};
 
+use ethrex_crypto::NativeCrypto;
+
 use crate::constants::EMPTY_KECCAK_HASH;
-use crate::types::{AccountUpdate, Code};
+use crate::types::{AccountUpdate, Code, GenesisAccount};
 use crate::{Address, Bytes, H256, U256};
 
 #[derive(Debug, thiserror::Error)]
@@ -49,6 +51,10 @@ impl Default for PbtAccount {
     }
 }
 
+/// Fields are public for the experimental phase; callers writing them
+/// directly must uphold the stated invariants (zero-valued slots
+/// absent, storage only for existing accounts) or computed roots
+/// diverge from the spec.
 #[derive(Debug, Clone, Default)]
 pub struct PbtState {
     pub accounts: BTreeMap<Address, PbtAccount>,
@@ -60,6 +66,41 @@ pub struct PbtState {
 }
 
 impl PbtState {
+    /// Seed the flat model from a genesis `alloc`, mirroring the MPT
+    /// path in `Store::setup_genesis_state_trie`: bytecode is hashed
+    /// with [`Code::from_bytecode`] and keyed by its hash (empty code
+    /// is never inserted — the empty code hash resolves without a
+    /// store lookup), and zero-valued storage slots are skipped so the
+    /// zero-slots-absent invariant holds from the start.
+    pub fn from_genesis_alloc(alloc: &BTreeMap<Address, GenesisAccount>) -> Self {
+        let mut state = Self::default();
+        for (address, account) in alloc {
+            let code = Code::from_bytecode(account.code.clone(), &NativeCrypto);
+            let code_hash = code.hash;
+            if code_hash != *EMPTY_KECCAK_HASH {
+                state.code.insert(code_hash, code);
+            }
+            state.accounts.insert(
+                *address,
+                PbtAccount {
+                    nonce: account.nonce,
+                    balance: account.balance,
+                    code_hash,
+                },
+            );
+            let slots: BTreeMap<H256, U256> = account
+                .storage
+                .iter()
+                .filter(|(_, value)| !value.is_zero())
+                .map(|(slot, value)| (H256(slot.to_big_endian()), *value))
+                .collect();
+            if !slots.is_empty() {
+                state.storage.insert(*address, slots);
+            }
+        }
+        state
+    }
+
     /// Apply a block's [`AccountUpdate`] stream, mirroring the MPT
     /// apply order in `Store::apply_account_updates_from_trie_batch`:
     /// removal drops the account and its storage; `removed_storage`
@@ -123,6 +164,7 @@ impl PbtState {
                     .code_bytes()
             };
 
+            debug_assert!(code.len() <= u32::MAX as usize);
             entries.insert(
                 get_tree_key_for_basic_data(&address32),
                 encode_basic_data(code.len() as u32, account.nonce, account.balance)?,
@@ -320,6 +362,70 @@ mod tests {
         assert_eq!(account.balance, U256::zero());
         assert_eq!(account.code_hash, *EMPTY_KECCAK_HASH);
         assert_eq!(state.storage[&a][&H256::from_low_u64_be(1)], U256::from(42));
+    }
+
+    // ---- from_genesis_alloc ----
+
+    #[test]
+    fn from_genesis_alloc_mirrors_genesis_trie_setup() {
+        use crate::types::GenesisAccount;
+
+        let eoa = addr(0xaa);
+        let contract = addr(0xbb);
+        let contract_code = Bytes::from_static(&[0x60, 0x01, 0x60, 0x02, 0x01]);
+        let expected_code = code_of(&contract_code);
+
+        let mut contract_storage = BTreeMap::new();
+        contract_storage.insert(U256::from(1), U256::from(42));
+        // Zero-valued slots must be skipped, mirroring setup_genesis_state_trie.
+        contract_storage.insert(U256::from(2), U256::zero());
+
+        let mut alloc: BTreeMap<Address, GenesisAccount> = BTreeMap::new();
+        alloc.insert(
+            eoa,
+            GenesisAccount {
+                code: Bytes::new(),
+                storage: BTreeMap::new(),
+                balance: U256::from(1_000),
+                nonce: 7,
+            },
+        );
+        alloc.insert(
+            contract,
+            GenesisAccount {
+                code: contract_code,
+                storage: contract_storage,
+                balance: U256::from(5),
+                nonce: 1,
+            },
+        );
+
+        let state = PbtState::from_genesis_alloc(&alloc);
+
+        assert_eq!(state.accounts.len(), 2);
+        let eoa_account = &state.accounts[&eoa];
+        assert_eq!(eoa_account.nonce, 7);
+        assert_eq!(eoa_account.balance, U256::from(1_000));
+        assert_eq!(eoa_account.code_hash, *EMPTY_KECCAK_HASH);
+
+        let contract_account = &state.accounts[&contract];
+        assert_eq!(contract_account.nonce, 1);
+        assert_eq!(contract_account.balance, U256::from(5));
+        assert_eq!(contract_account.code_hash, expected_code.hash);
+
+        // Code store: keyed by the code hash; empty EOA code is never inserted
+        // (the empty code hash resolves without a store lookup).
+        assert_eq!(state.code.len(), 1);
+        assert_eq!(state.code[&expected_code.hash].code(), expected_code.code());
+
+        // Storage: the zero-valued slot is absent, the non-zero slot is keyed
+        // by its 32-byte big-endian form, and the EOA has no storage map.
+        assert_eq!(state.storage.len(), 1);
+        let slots = &state.storage[&contract];
+        assert_eq!(slots.len(), 1);
+        assert_eq!(slots[&H256(U256::from(1).to_big_endian())], U256::from(42));
+
+        assert!(state.compute_root().is_ok());
     }
 
     // ---- compute_root ----

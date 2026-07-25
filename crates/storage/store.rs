@@ -27,7 +27,7 @@ use ethrex_common::{
     types::{
         AccountInfo, AccountState, AccountUpdate, Block, BlockBody, BlockHash, BlockHeader,
         BlockNumber, ChainConfig, Code, CodeMetadata, ForkId, Genesis, GenesisAccount, Index,
-        Receipt, Transaction,
+        PbtState, Receipt, Transaction,
         block_access_list::BlockAccessList,
         block_execution_witness::{ExecutionWitness, RpcExecutionWitness},
     },
@@ -215,6 +215,11 @@ pub struct Store {
     /// Cache for code metadata (code length), keyed by the bytecode hash.
     /// Uses FxHashMap for efficient lookups, much smaller than code cache.
     code_metadata_cache: Arc<Mutex<rustc_hash::FxHashMap<H256, CodeMetadata>>>,
+
+    /// Experimental EIP-8297 binary-tree state snapshots, keyed by block
+    /// hash (`ChainConfig::enable_binary_tree_at_genesis`). In-memory only:
+    /// seeded at genesis for now; block-import maintenance lands separately.
+    pbt_states: Arc<Mutex<rustc_hash::FxHashMap<BlockHash, Arc<PbtState>>>>,
 
     /// Serializes concurrent `forkchoice_update` callers so that the cache
     /// update and the DB write transaction remain mutually ordered.
@@ -1875,6 +1880,7 @@ impl Store {
             last_computed_flatkeyvalue: Arc::new(RwLock::new(last_written)),
             account_code_cache: Arc::new(Mutex::new(CodeCache::default())),
             code_metadata_cache: Arc::new(Mutex::new(rustc_hash::FxHashMap::default())),
+            pbt_states: Arc::new(Mutex::new(rustc_hash::FxHashMap::default())),
             fcu_lock: Arc::new(tokio::sync::Mutex::new(())),
             safe_commit_root,
             background_threads: Default::default(),
@@ -2547,6 +2553,31 @@ impl Store {
         }
     }
 
+    /// Returns the experimental EIP-8297 binary-tree state snapshot for
+    /// `block_hash`, if one has been stored. Populated at genesis when
+    /// `ChainConfig::enable_binary_tree_at_genesis` is set.
+    pub fn get_pbt_state(&self, block_hash: BlockHash) -> Option<Arc<PbtState>> {
+        self.pbt_states
+            .lock()
+            .expect("pbt_states mutex poisoned")
+            .get(&block_hash)
+            .cloned()
+    }
+
+    /// Stores the experimental EIP-8297 binary-tree state snapshot for
+    /// `block_hash`.
+    ///
+    /// Besides the internal genesis seeding, this is also the offline-seeding
+    /// API for nodes that cannot replay from genesis: the snapshot must equal
+    /// what replay would have computed — it is self-verifying against the
+    /// fork-active header's `state_root`.
+    pub fn put_pbt_state(&self, block_hash: BlockHash, state: PbtState) {
+        self.pbt_states
+            .lock()
+            .expect("pbt_states mutex poisoned")
+            .insert(block_hash, Arc::new(state));
+    }
+
     pub async fn add_initial_state(&mut self, genesis: Genesis) -> Result<(), StoreError> {
         self.add_initial_state_inner(genesis, false).await
     }
@@ -2622,10 +2653,32 @@ impl Store {
                     .await?
             }
         }
+        // Experimental EIP-8297: seed the binary-tree snapshot for the
+        // genesis block. Built by borrowing the alloc before it moves into
+        // the MPT setup below; the MPT is still built as the lookup
+        // structure, but under the flag the header's state_root commits to
+        // the binary-tree root.
+        if genesis.config.enable_binary_tree_at_genesis {
+            let pbt_state = PbtState::from_genesis_alloc(&genesis.alloc);
+            let pbt_root = pbt_state.compute_root()?;
+            if pbt_root != genesis_block.header.state_root {
+                return Err(StoreError::Custom(format!(
+                    "binary-tree genesis root mismatch: computed {pbt_root:#x} but the genesis header commits to {:#x}",
+                    genesis_block.header.state_root
+                )));
+            }
+            self.put_pbt_state(genesis_hash, pbt_state);
+        }
+
         // Store genesis accounts
         // TODO: Should we use this root instead of computing it before the block hash check?
         let genesis_state_root = self.setup_genesis_state_trie(genesis.alloc).await?;
-        debug_assert_eq!(genesis_state_root, genesis_block.header.state_root);
+        // Under the binary-tree flag the header commits to the binary-tree
+        // root (verified above), not the MPT root, so this only holds with
+        // the flag off.
+        if !genesis.config.enable_binary_tree_at_genesis {
+            debug_assert_eq!(genesis_state_root, genesis_block.header.state_root);
+        }
 
         // Store genesis block
         info!(hash = %genesis_hash, "Storing genesis block");
@@ -4594,5 +4647,117 @@ mod datadir_tests {
         fs::create_dir(dir.path().join("CURRENT")).unwrap();
         fs::create_dir(dir.path().join("MANIFEST-000001")).unwrap();
         assert!(!dir_contains_legacy_db(dir.path()).unwrap());
+    }
+}
+
+#[cfg(test)]
+mod pbt_genesis_tests {
+    use super::*;
+    use ethrex_common::Bytes;
+    use ethrex_common::types::Genesis;
+
+    fn small_alloc() -> BTreeMap<Address, GenesisAccount> {
+        let mut alloc = BTreeMap::new();
+        alloc.insert(
+            Address::from_low_u64_be(0xaa),
+            GenesisAccount {
+                code: Bytes::new(),
+                storage: BTreeMap::new(),
+                balance: U256::from(1_000u64),
+                nonce: 1,
+            },
+        );
+        let mut storage = BTreeMap::new();
+        storage.insert(U256::from(1), U256::from(7));
+        alloc.insert(
+            Address::from_low_u64_be(0xbb),
+            GenesisAccount {
+                code: Bytes::from_static(&[0x60, 0x01]),
+                storage,
+                balance: U256::from(2u64),
+                nonce: 0,
+            },
+        );
+        alloc
+    }
+
+    fn flagged_genesis() -> Genesis {
+        let mut genesis = Genesis {
+            alloc: small_alloc(),
+            ..Default::default()
+        };
+        genesis.config.enable_binary_tree_at_genesis = true;
+        genesis
+    }
+
+    #[tokio::test]
+    async fn add_initial_state_seeds_genesis_pbt_snapshot_when_flagged() {
+        let mut store = Store::new("test-pbt", EngineType::InMemory).expect("in-memory store");
+        let genesis = flagged_genesis();
+        let genesis_block = genesis.get_block();
+        let genesis_hash = genesis_block.hash();
+
+        store
+            .add_initial_state(genesis)
+            .await
+            .expect("flagged genesis must initialize");
+
+        let state = store
+            .get_pbt_state(genesis_hash)
+            .expect("flagged genesis must seed a binary-tree snapshot");
+        assert_eq!(
+            state.compute_root().expect("snapshot root"),
+            genesis_block.header.state_root,
+            "snapshot root must equal the genesis header's state_root"
+        );
+    }
+
+    #[tokio::test]
+    async fn add_initial_state_without_flag_seeds_no_pbt_snapshot() {
+        let mut store = Store::new("test-pbt-off", EngineType::InMemory).expect("in-memory store");
+        let genesis = Genesis {
+            alloc: small_alloc(),
+            ..Default::default()
+        };
+        let genesis_hash = genesis.get_block().hash();
+
+        store
+            .add_initial_state(genesis)
+            .await
+            .expect("unflagged genesis must initialize");
+
+        assert!(
+            store.get_pbt_state(genesis_hash).is_none(),
+            "no snapshot may be seeded when the flag is off"
+        );
+    }
+
+    #[tokio::test]
+    async fn binarytree_fixture_boots_and_snapshot_matches_header_root() {
+        let file = std::fs::File::open("../../fixtures/genesis/l1-binarytree.json")
+            .expect("l1-binarytree.json fixture must exist");
+        let genesis: Genesis = serde_json::from_reader(std::io::BufReader::new(file))
+            .expect("fixture must deserialize");
+        assert!(
+            genesis.config.enable_binary_tree_at_genesis,
+            "fixture must set enableBinaryTreeAtGenesis"
+        );
+        let genesis_block = genesis.get_block();
+        let genesis_hash = genesis_block.hash();
+
+        let mut store =
+            Store::new("test-pbt-fixture", EngineType::InMemory).expect("in-memory store");
+        store
+            .add_initial_state(genesis)
+            .await
+            .expect("fixture genesis must initialize");
+
+        let state = store
+            .get_pbt_state(genesis_hash)
+            .expect("fixture genesis must seed a binary-tree snapshot");
+        assert_eq!(
+            state.compute_root().expect("snapshot root"),
+            genesis_block.header.state_root,
+        );
     }
 }
