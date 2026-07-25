@@ -2640,6 +2640,11 @@ impl Store {
         if !self.get_chain_config().enable_binary_tree_at_genesis {
             return Ok(header.state_root);
         }
+        // `header.hash()` may recompute keccak for headers freshly decoded
+        // from the DB (the OnceLock cache only helps reused instances).
+        // Acceptable while the flag is experimental — the flag-off path above
+        // returns before hashing; revisit with a hash-taking variant when
+        // this hardens.
         let block_hash = header.hash();
         self.get_mpt_lookup_root(block_hash)?.ok_or_else(|| {
             StoreError::Custom(format!(

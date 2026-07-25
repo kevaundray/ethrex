@@ -991,12 +991,11 @@ impl Blockchain {
             // Experimental EIP-8297: the header must commit to the
             // binary-trie root, not the MPT root. Extend the parent's
             // snapshot with this payload's updates; the snapshot itself is
-            // NOT stored here — import does that when the block comes back
-            // through `store_block`.
-            let parent = self.require_pbt_state(context.parent_hash())?;
-            let mut pbt_state = (*parent).clone();
-            pbt_state.apply_account_updates(&account_updates);
-            pbt_state.compute_root().map_err(StoreError::from)?
+            // NOT stored here — import is the only writer, when the block
+            // comes back through `store_block`.
+            let (_pbt_state, binary_root) =
+                self.extended_pbt_state(context.parent_hash(), &account_updates)?;
+            binary_root
         } else {
             ret_acount_updates_list.state_trie_hash
         };

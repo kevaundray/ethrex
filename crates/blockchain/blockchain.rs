@@ -2200,11 +2200,14 @@ impl Blockchain {
             // still persisted below as the lookup structure, addressed via
             // the side registry (`put_mpt_lookup_root`) since the header no
             // longer carries the MPT root.
-            let parent = self.require_pbt_state(block.header.parent_hash)?;
-            let mut pbt_state = (*parent).clone();
-            pbt_state.apply_account_updates(account_updates);
-            let binary_root = pbt_state.compute_root().map_err(StoreError::from)?;
+            let (pbt_state, binary_root) =
+                self.extended_pbt_state(block.header.parent_hash, account_updates)?;
             validate_state_root(&block.header, binary_root)?;
+            // Both registry writes deliberately precede `store_block_updates`:
+            // the apply path resolves the previous block's MPT root through
+            // the registry, so the entries must be visible before the batch is
+            // handed to the persist worker. The entries are deterministic, so
+            // a failed batch write followed by a retry overwrites identically.
             self.storage.put_pbt_state(block.hash(), pbt_state)?;
             self.storage
                 .put_mpt_lookup_root(block.hash(), account_updates_list.state_trie_hash)?;
@@ -2245,6 +2248,24 @@ impl Blockchain {
                      seed a snapshot via put_pbt_state"
                 ))
             })
+    }
+
+    /// Extends `parent_hash`'s binary-tree snapshot with `account_updates`
+    /// and returns the new state together with its binary-trie root. Shared
+    /// by block import (`store_block`, which validates the root against the
+    /// header and is the only writer of the snapshot) and payload building
+    /// (`finalize_payload`, which commits only the root into the built
+    /// header).
+    pub(crate) fn extended_pbt_state(
+        &self,
+        parent_hash: BlockHash,
+        account_updates: &[AccountUpdate],
+    ) -> Result<(PbtState, H256), ChainError> {
+        let parent = self.require_pbt_state(parent_hash)?;
+        let mut pbt_state = (*parent).clone();
+        pbt_state.apply_account_updates(account_updates);
+        let binary_root = pbt_state.compute_root().map_err(StoreError::from)?;
+        Ok((pbt_state, binary_root))
     }
 
     pub fn add_block(&self, block: Block) -> Result<(), ChainError> {
@@ -2721,6 +2742,31 @@ impl Blockchain {
         );
     }
 
+    /// EIP-8159: persist a peer-supplied BAL fetched during sync so peers can
+    /// later request it over eth/71 without re-execution (the batch import
+    /// paths don't record BALs, so without this they'd fall back to
+    /// regenerating against possibly-pruned parent state). Only a BAL that
+    /// matches the block's header commitment is persisted; a wrong/empty peer
+    /// BAL is dropped here, and the serve path guards again. Persist failures
+    /// are non-fatal. Shared by the batch import path and its binary-tree
+    /// per-block fallback so the rule can't drift between them.
+    fn persist_matching_block_access_list(
+        &self,
+        block_hash: BlockHash,
+        header_commitment: Option<H256>,
+        bal: Option<&BlockAccessList>,
+    ) {
+        let Some(bal) = bal else {
+            return;
+        };
+        if !bal.matches_commitment(header_commitment, &NativeCrypto) {
+            return;
+        }
+        if let Err(err) = self.storage.store_block_access_list(block_hash, bal) {
+            warn!("Failed to persist block access list for {block_hash} during batch sync: {err}");
+        }
+    }
+
     /// Adds multiple blocks in a batch.
     ///
     /// If an error occurs, returns a tuple containing:
@@ -2779,16 +2825,11 @@ impl Blockchain {
                         }),
                     )
                 })?;
-                // Preserve the batch path's EIP-8159 behavior: persist the
-                // peer-supplied BAL when it matches the header commitment.
-                if let Some(bal) = bals.get(i).and_then(|b| b.as_ref())
-                    && bal.matches_commitment(bal_commitment, &NativeCrypto)
-                    && let Err(err) = self.storage.store_block_access_list(block_hash, bal)
-                {
-                    warn!(
-                        "Failed to persist block access list for {block_hash} during batch sync: {err}"
-                    );
-                }
+                self.persist_matching_block_access_list(
+                    block_hash,
+                    bal_commitment,
+                    bals.get(i).and_then(|b| b.as_ref()),
+                );
                 last_valid_hash = block_hash;
                 tokio::task::yield_now().await;
             }
@@ -2912,20 +2953,11 @@ impl Blockchain {
         // Check state root matches the one in block header
         validate_state_root(&last_block.header, new_state_root).map_err(|e| (e, None))?;
 
-        // EIP-8159: persist the per-block BAL fetched during sync so peers can
-        // later request it over eth/71 without re-execution (the batch path
-        // doesn't record BALs, so without this they'd fall back to regenerating
-        // against possibly-pruned parent state). Only persist a BAL that matches
-        // its header commitment; a wrong/empty peer BAL is dropped here, and the
-        // serve path guards again. Captured before `blocks` is moved below.
-        let bals_to_store: Vec<(BlockHash, BlockAccessList)> = blocks
+        // Hash/commitment pairs for the EIP-8159 BAL persistence below,
+        // captured before `blocks` is moved into the update batch.
+        let bal_block_meta: Vec<(BlockHash, Option<H256>)> = blocks
             .iter()
-            .zip(bals.iter())
-            .filter_map(|(block, bal)| {
-                let bal = bal.as_ref()?;
-                bal.matches_commitment(block.header.block_access_list_hash, &NativeCrypto)
-                    .then(|| (block.hash(), bal.clone()))
-            })
+            .map(|block| (block.hash(), block.header.block_access_list_hash))
             .collect();
 
         let update_batch = UpdateBatch {
@@ -2941,12 +2973,8 @@ impl Blockchain {
             .store_block_updates(update_batch)
             .map_err(|e| (e.into(), None))?;
 
-        for (block_hash, bal) in &bals_to_store {
-            if let Err(err) = self.storage.store_block_access_list(*block_hash, bal) {
-                warn!(
-                    "Failed to persist block access list for {block_hash} during batch sync: {err}"
-                );
-            }
+        for ((block_hash, commitment), bal) in bal_block_meta.into_iter().zip(bals.iter()) {
+            self.persist_matching_block_access_list(block_hash, commitment, bal.as_ref());
         }
 
         let elapsed_seconds = interval.elapsed().as_secs_f64();
