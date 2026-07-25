@@ -619,18 +619,32 @@ the per-block diff), so the condition generalized to
 (`crates/blockchain/blockchain.rs`). Flag off this is behaviorally
 identical to the old `collect_witness`.
 
-**Limitation: engine API degrades to SYNCING.** The FCU/newPayload paths
-probe `has_state_root(header.state_root)` directly
-(`crates/blockchain/fork_choice.rs:176`,
-`crates/networking/rpc/engine/payload.rs:1237`, similarly
-`rpc/eth/client.rs:75` for the eth-client head probe). Under the flag the
-header root is a PBT root that no MPT layer ever matches, so these probes
-report the state as absent and the node answers SYNCING — the safe
-direction, but it means a flag-on node is not yet drivable end-to-end
-through the engine API. `eth_getProof` is likewise unpatched (proofs over
-the binary trie are out of scope; it would prove against the wrong trie).
-Tracing/prewarm paths that key off header roots degrade conservatively
-(skip/fall back) rather than corrupt.
+**Limitation LIFTED: engine API SYNCING degradation.** The FCU/newPayload/
+startup reachability probes used to feed `header.state_root` straight into
+`has_state_root`, which no MPT layer ever matches under the flag, so a
+flag-on node answered every FCU with SYNCING and `--dev` died at startup
+("Unknown state found in DB"). They now resolve through the registry via
+`Store::has_reconstructible_state(&BlockHeader)` (built on
+`mpt_state_root_for_header_opt`; a missing registry entry counts as
+"state not reconstructible", same as a missing root, never an error).
+Converted probes: `regenerate_head_state` (cmd/ethrex/initializers.rs),
+FCU (`crates/blockchain/fork_choice.rs`), the newPayload parent-state
+SYNCING guard (`crates/networking/rpc/engine/payload.rs`), the
+`eth_syncing` head probe (`rpc/eth/client.rs`), all four full-sync
+resume-point/parent probes (`crates/networking/p2p/sync/full.rs`), the
+tracing parent-walk (`crates/blockchain/tracing.rs:279` — tracing
+re-execution now resolves under the flag instead of erroring out at the
+re-exec cap), and the L2 committer walk-back
+(`crates/l2/sequencer/l1_committer.rs`, flag-off identical). Flag off,
+the helper returns `has_state_root(header.state_root)` bit-identically.
+A `--dev` devnet on `fixtures/genesis/l1-binarytree.json` now boots and
+produces blocks end-to-end through the engine API (this also required
+teaching the dev block producer FCUv4/getPayloadV6 for Amsterdam — a
+fork-version gap independent of the flag; the unflagged Amsterdam twin
+fixture failed identically).
+
+**Limitation remaining: `eth_getProof`.** Unpatched (proofs over the
+binary trie are out of scope; it would prove against the wrong trie).
 
 **Limitation: in-memory registries.** Both registries (`pbt_states`,
 `mpt_lookup_roots`) are in-memory only:

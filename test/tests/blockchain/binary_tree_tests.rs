@@ -12,6 +12,7 @@ use bytes::Bytes;
 use ethrex_blockchain::{
     Blockchain,
     error::{ChainError, InvalidBlockError},
+    fork_choice::apply_fork_choice,
     payload::{BuildPayloadArgs, create_payload},
 };
 use ethrex_common::{
@@ -1024,6 +1025,45 @@ async fn binary_tree_forkchoice_flushes_backlog_through_mpt_lookup_roots() {
     assert!(
         store.has_state_root(head_mpt_root).unwrap(),
         "recent (head) MPT state must remain serveable after the flush"
+    );
+}
+
+/// ENGINE-level fork choice under the flag: `apply_fork_choice` probes
+/// whether the head's state is constructible before canonicalizing, and
+/// under the flag the header's `state_root` is the binary-trie root — the
+/// probe must resolve through the MPT lookup registry instead of feeding
+/// the raw header root to `has_state_root` (which can never match an MPT
+/// layer and would answer every FCU with `StateNotReachable`).
+///
+/// Chain of 2 canonicalized, block 3 imported but NOT canonicalized: the
+/// FCU on block 3 must succeed and genuinely advance the canonical head.
+#[tokio::test]
+async fn binary_tree_apply_fork_choice_resolves_state_through_registry() {
+    let (store, blockchain, blocks) = build_and_import_chain(2).await;
+
+    // Import block 3 without canonicalizing it, so the fork choice below
+    // has real work to do (head advances 2 -> 3 through the probe).
+    let block3 = build_block(&store, &blockchain, &blocks[1].header).await;
+    blockchain
+        .add_block(block3.clone())
+        .expect("block 3 should import under the binary-tree flag");
+
+    let head = apply_fork_choice(&store, block3.hash(), H256::zero(), H256::zero())
+        .await
+        .expect(
+            "fork choice must resolve state reachability through the MPT lookup registry \
+             under the binary-tree flag (raw PBT header roots match no MPT layer)",
+        );
+    assert_eq!(head.hash(), block3.hash(), "FCU must return the new head");
+    assert_eq!(
+        store.get_latest_block_number().await.unwrap(),
+        3,
+        "canonical head must advance to block 3"
+    );
+    assert_eq!(
+        store.get_canonical_block_hash(3).await.unwrap(),
+        Some(block3.hash()),
+        "block 3 must be the canonical block at height 3"
     );
 }
 

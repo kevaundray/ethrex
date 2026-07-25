@@ -2663,22 +2663,48 @@ impl Store {
     /// recorded — the MPT for that block is unaddressable, which means the
     /// block was never imported through this store instance.
     pub fn mpt_state_root_for_header(&self, header: &BlockHeader) -> Result<H256, StoreError> {
-        if !self.get_chain_config().enable_binary_tree_at_genesis {
-            return Ok(header.state_root);
-        }
-        // `header.hash()` may recompute keccak for headers freshly decoded
-        // from the DB (the OnceLock cache only helps reused instances).
-        // Acceptable while the flag is experimental — the flag-off path above
-        // returns before hashing; revisit with a hash-taking variant when
-        // this hardens.
-        let block_hash = header.hash();
-        self.get_mpt_lookup_root(block_hash)?.ok_or_else(|| {
+        self.mpt_state_root_for_header_opt(header)?.ok_or_else(|| {
+            let block_hash = header.hash();
             StoreError::Custom(format!(
                 "missing MPT lookup root for block {block_hash:#x} (experimental binary-tree \
                  commitment, in-memory only) — the block was not imported through this store; \
                  restart requires re-import from genesis"
             ))
         })
+    }
+
+    /// Like [`Store::mpt_state_root_for_header`] but Option-shaped for
+    /// reachability probes: a missing registry entry means "this block's
+    /// state is not reconstructible right now" (restart before replay, or a
+    /// block we never imported) — probes must treat it exactly like an
+    /// unknown state root, not as an error.
+    pub fn mpt_state_root_for_header_opt(
+        &self,
+        header: &BlockHeader,
+    ) -> Result<Option<H256>, StoreError> {
+        if !self.get_chain_config().enable_binary_tree_at_genesis {
+            return Ok(Some(header.state_root));
+        }
+        // `header.hash()` may recompute keccak for headers freshly decoded
+        // from the DB (the OnceLock cache only helps reused instances).
+        // Acceptable while the flag is experimental — the flag-off path above
+        // returns before hashing; revisit with a hash-taking variant when
+        // this hardens.
+        self.get_mpt_lookup_root(header.hash())
+    }
+
+    /// Whether `header`'s post-state can be constructed from this store:
+    /// resolves the header's MPT lookup root (the header's own `state_root`
+    /// normally, the side-registry entry under the experimental EIP-8297
+    /// flag) and checks the MPT layer for it is present. Under the flag a
+    /// missing registry entry answers `false` — same meaning as a missing
+    /// state root. Use this instead of `has_state_root(header.state_root)`
+    /// whenever the root being probed comes from a block header.
+    pub fn has_reconstructible_state(&self, header: &BlockHeader) -> Result<bool, StoreError> {
+        match self.mpt_state_root_for_header_opt(header)? {
+            Some(state_root) => self.has_state_root(state_root),
+            None => Ok(false),
+        }
     }
 
     pub async fn add_initial_state(&mut self, genesis: Genesis) -> Result<(), StoreError> {

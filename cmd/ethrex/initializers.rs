@@ -1015,8 +1015,12 @@ pub async fn regenerate_head_state(
 
     let mut current_last_header = last_header;
 
-    // Find the last block with a known state root
-    while !store.has_state_root(current_last_header.state_root)? {
+    // Find the last block with a known state root. The probe resolves the
+    // header's MPT lookup root first: under the experimental binary-tree flag
+    // the header commits to the binary-trie root, and only blocks whose
+    // registry entry survived (genesis is reseeded on every boot) anchor the
+    // walk — the replay below re-derives the registry entries for the rest.
+    while !store.has_reconstructible_state(&current_last_header)? {
         if current_last_header.number == 0 {
             return Err(eyre::eyre!(
                 "Unknown state found in DB. Please run `ethrex removedb` and restart node"
