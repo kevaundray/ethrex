@@ -16,6 +16,7 @@ use ethrex_binary_trie::embedding::{
     address20_to_address32, chunkify_code, encode_basic_data, get_tree_key_for_basic_data,
     get_tree_key_for_code_chunk, get_tree_key_for_code_hash, get_tree_key_for_storage_slot,
 };
+use ethrex_binary_trie::trie::BinaryTrie;
 use ethrex_binary_trie::trie::rebuild::{Entries, rebuild_root};
 
 use ethrex_crypto::NativeCrypto;
@@ -149,6 +150,35 @@ impl PbtState {
     /// it (Phase 2 swaps this for incremental maintenance behind the
     /// same signature).
     pub fn compute_root(&self) -> Result<H256, PbtStateError> {
+        Ok(rebuild_root(&self.embed_entries()?))
+    }
+
+    /// Materialize this state's binary trie, for proof generation
+    /// (`eth_getProof`): the returned [`BinaryTrie`] answers
+    /// [`BinaryTrie::prove`] / `get` for embedded tree keys, and its
+    /// `root()` equals [`Self::compute_root`] (same embedding; the
+    /// incremental trie is differentially tested against the rebuild
+    /// oracle `compute_root` uses).
+    ///
+    /// Deliberate Seam B companion to `compute_root`: callers get a
+    /// provable trie without the embedding's `Entries` representation
+    /// leaking out, so Phase 2's incremental maintenance can change
+    /// the internals of both behind unchanged signatures. Cost is one
+    /// full re-embed per call, O(state) — same order as
+    /// `compute_root`; callers should prove all keys they need from
+    /// one built trie rather than rebuilding per key.
+    pub fn build_trie(&self) -> Result<BinaryTrie, PbtStateError> {
+        let mut trie = BinaryTrie::new();
+        for (key, value) in self.embed_entries()? {
+            trie.insert(key, value)?;
+        }
+        Ok(trie)
+    }
+
+    /// Embed the whole state into binary-trie entries, mirroring the
+    /// spec's `embed_flat_state`. Private: the entries representation
+    /// must not leak past Seam B (see `compute_root` / `build_trie`).
+    fn embed_entries(&self) -> Result<Entries, PbtStateError> {
         let mut entries = Entries::new();
 
         for (address, account) in &self.accounts {
@@ -196,7 +226,7 @@ impl PbtState {
             }
         }
 
-        Ok(rebuild_root(&entries))
+        Ok(entries)
     }
 }
 
@@ -485,6 +515,55 @@ mod tests {
         assert!(matches!(
             state.compute_root().unwrap_err(),
             PbtStateError::CodeMissing(h) if h == dangling
+        ));
+    }
+
+    // ---- build_trie (Seam B proof companion) ----
+
+    #[test]
+    fn build_trie_agrees_with_compute_root_and_serves_proofs() {
+        use ethrex_binary_trie::embedding::{
+            address20_to_address32, get_tree_key_for_basic_data, get_tree_key_for_storage_slot,
+        };
+        use ethrex_binary_trie::trie::verify_proof;
+
+        let mut state = PbtState::default();
+        let a = addr(9);
+        state.accounts.insert(a, eoa_account(3, U256::from(500)));
+        let slot = H256::from_low_u64_be(1);
+        state
+            .storage
+            .insert(a, BTreeMap::from([(slot, U256::from(42))]));
+
+        let trie = state.build_trie().unwrap();
+        let root = state.compute_root().unwrap();
+        assert_eq!(trie.root(), root, "both seams must commit identically");
+
+        // The built trie serves verifiable proofs against that root:
+        // inclusion for an embedded key, exclusion for an absent one.
+        let a32 = address20_to_address32(a);
+        let basic_key = get_tree_key_for_basic_data(&a32);
+        let value = trie.get(&basic_key).expect("basic-data leaf embedded");
+        assert!(verify_proof(root, &basic_key, Some(value), &trie.prove(&basic_key)).is_ok());
+
+        let absent_key = get_tree_key_for_storage_slot(&a32, U256::from(7));
+        assert!(trie.get(&absent_key).is_none());
+        assert!(verify_proof(root, &absent_key, None, &trie.prove(&absent_key)).is_ok());
+    }
+
+    #[test]
+    fn build_trie_surfaces_missing_code_like_compute_root() {
+        let mut state = PbtState::default();
+        state.accounts.insert(
+            addr(1),
+            PbtAccount {
+                code_hash: H256::repeat_byte(0xab),
+                ..Default::default()
+            },
+        );
+        assert!(matches!(
+            state.build_trie().unwrap_err(),
+            PbtStateError::CodeMissing(_)
         ));
     }
 

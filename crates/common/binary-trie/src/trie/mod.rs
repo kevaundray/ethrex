@@ -5,10 +5,12 @@
 mod binary_trie;
 pub mod bits;
 pub mod node;
+pub mod proof;
 pub mod rebuild;
 
 pub use binary_trie::BinaryTrie;
 pub use node::EMPTY_TRIE_ROOT;
+pub use proof::{ProofError, verify_proof};
 
 /// Longest accepted key, in bytes. Bounds branch-prefix bit counts
 /// below the two-byte limit of `encode_bit_prefix`.

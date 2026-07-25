@@ -302,6 +302,30 @@ pub fn encode_basic_data(
     Ok(out)
 }
 
+/// The unpacked fields of a basic-data leaf; see [`decode_basic_data`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BasicData {
+    pub version: u8,
+    pub code_size: u32,
+    pub nonce: u64,
+    pub balance: U256,
+}
+
+/// Unpack a basic-data leaf value produced by [`encode_basic_data`].
+///
+/// Consumers of proven leaf values (e.g. the `eth_getProof` response
+/// builder) need the account fields back out of the packed encoding.
+/// Purely positional — the version byte is returned, not validated,
+/// so callers can surface unknown layouts instead of misreading them.
+pub fn decode_basic_data(value: &[u8; 32]) -> BasicData {
+    BasicData {
+        version: value[0],
+        code_size: u32::from_be_bytes(value[4..8].try_into().expect("4-byte slice")),
+        nonce: u64::from_be_bytes(value[8..16].try_into().expect("8-byte slice")),
+        balance: U256::from_big_endian(&value[16..32]),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -309,6 +333,23 @@ mod tests {
     use hex_literal::hex;
 
     const ADDR20: H160 = H160(hex!("00112233445566778899aabbccddeeff00112233"));
+
+    #[test]
+    fn basic_data_round_trips_through_decode() {
+        let balance = (U256::from(1) << 128) - 1;
+        let encoded = encode_basic_data(u32::MAX, u64::MAX, balance).unwrap();
+        assert_eq!(
+            decode_basic_data(&encoded),
+            BasicData {
+                version: BASIC_DATA_VERSION,
+                code_size: u32::MAX,
+                nonce: u64::MAX,
+                balance,
+            }
+        );
+        let zero = encode_basic_data(0, 0, U256::zero()).unwrap();
+        assert_eq!(decode_basic_data(&zero).balance, U256::zero());
+    }
 
     #[test]
     fn address32_prepends_twelve_zero_bytes() {

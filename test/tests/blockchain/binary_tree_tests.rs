@@ -1084,3 +1084,196 @@ async fn binary_tree_apply_fork_choice_resolves_state_through_registry() {
 //   malformed-genesis construction would only exercise the documented
 //   `Genesis::compute_state_root` expect panic (a genesis-validation concern,
 //   not the block-import cap surfacing).
+
+/// `eth_getProof` under the flag serves the experimental
+/// `pbt-getproof-v1` shape (docs/eip-draft-pbt-eth-getproof.md), and
+/// every returned proof verifies *independently* — via the crate's
+/// stateless `verify_proof`, no trie access — against the block
+/// header's binary-trie `state_root`: inclusion for a live contract's
+/// account leaves and a written storage slot, exclusion for an unset
+/// slot and for a nonexistent account's leaves.
+#[tokio::test]
+async fn binary_tree_get_proof_serves_independently_verifiable_proofs() {
+    use ethrex_binary_trie::embedding::{
+        address20_to_address32, decode_basic_data, get_tree_key_for_basic_data,
+        get_tree_key_for_code_hash, get_tree_key_for_storage_slot,
+    };
+    use ethrex_binary_trie::trie::verify_proof;
+    use ethrex_rpc::map_eth_requests;
+    use ethrex_rpc::test_utils::default_context_with_storage;
+    use ethrex_rpc::utils::RpcRequest;
+    use serde_json::Value;
+
+    fn unhex(s: &str) -> Vec<u8> {
+        hex::decode(s.strip_prefix("0x").unwrap()).expect("hex field")
+    }
+    /// Decode a response entry's `proof` array of hex node preimages.
+    fn proof_nodes(entry: &Value) -> Vec<Vec<u8>> {
+        entry["proof"]
+            .as_array()
+            .expect("proof array")
+            .iter()
+            .map(|node| unhex(node.as_str().expect("hex proof node")))
+            .collect()
+    }
+    async fn get_proof(
+        context: &ethrex_rpc::RpcApiContext,
+        address: Address,
+        slots: &str,
+    ) -> Value {
+        let body = format!(
+            r#"{{"jsonrpc":"2.0","method":"eth_getProof","params":["{address:#x}", {slots}, "latest"],"id":1}}"#
+        );
+        let request: RpcRequest = serde_json::from_str(&body).unwrap();
+        map_eth_requests(&request, context.clone())
+            .await
+            .expect("eth_getProof must succeed under the flag")
+    }
+
+    let sk = test_secret_key();
+    let sender = sender_from_key(&sk);
+    let signer: Signer = LocalSigner::new(sk).into();
+
+    // Same SSTORE contract as the zeroing test: stores calldata word 0
+    // into storage slot 0.
+    let contract = Address::from_low_u64_be(0xC0DE);
+    let genesis = load_genesis_fixture(
+        "l1-binarytree.json",
+        sender,
+        &[(
+            contract,
+            GenesisAccount {
+                balance: U256::zero(),
+                code: Bytes::from_static(&[0x5f, 0x35, 0x5f, 0x55, 0x00]),
+                storage: Default::default(),
+                nonce: 1,
+            },
+        )],
+    );
+    let chain_id = genesis.config.chain_id;
+    let store = setup_store_from_genesis(genesis).await;
+    let blockchain = Blockchain::default_with_store(store.clone());
+    let parent = store.get_block_header(0).unwrap().unwrap();
+
+    // Block 1: store 0xBEEF at slot 0, so the proof target is a
+    // post-genesis snapshot, not just the seeded genesis one.
+    let slot_value = U256::from(0xBEEF);
+    let tx = signed_tx(
+        chain_id,
+        0,
+        contract,
+        U256::zero(),
+        Bytes::copy_from_slice(&slot_value.to_big_endian()),
+        &signer,
+    )
+    .await;
+    blockchain.add_transaction_to_pool(tx).await.unwrap();
+    let block = build_block(&store, &blockchain, &parent).await;
+    assert_eq!(block.body.transactions.len(), 1);
+    blockchain.add_block(block.clone()).unwrap();
+    store
+        .forkchoice_update(vec![], block.header.number, block.hash(), None, None)
+        .await
+        .unwrap();
+    let state_root = block.header.state_root;
+    let code_hash = store
+        .get_pbt_state(block.hash())
+        .unwrap()
+        .expect("block-1 snapshot")
+        .accounts[&contract]
+        .code_hash;
+
+    let context = default_context_with_storage(store).await;
+
+    // -- Live contract, slot 0 set, slot 1 unset --
+    let response = get_proof(&context, contract, r#"["0x0","0x1"]"#).await;
+    assert_eq!(response["format"], "pbt-getproof-v1");
+    assert!(
+        response["storageHash"].is_null(),
+        "no per-account storage root exists in the unified tree"
+    );
+
+    let a32 = address20_to_address32(contract);
+
+    // Basic-data leaf: derived key matches, value decodes to the
+    // top-level conveniences, proof verifies as inclusion against the
+    // header root.
+    let basic = &response["binaryAccountProof"]["basicData"];
+    let basic_key = unhex(basic["treeKey"].as_str().unwrap());
+    assert_eq!(basic_key, get_tree_key_for_basic_data(&a32));
+    let basic_value: [u8; 32] = unhex(basic["value"].as_str().expect("live account leaf"))
+        .try_into()
+        .unwrap();
+    verify_proof(
+        state_root,
+        &basic_key,
+        Some(basic_value),
+        &proof_nodes(basic),
+    )
+    .expect("basic-data inclusion proof must verify against header.state_root");
+    let decoded = decode_basic_data(&basic_value);
+    assert_eq!(decoded.nonce, 1, "genesis contract nonce");
+    assert_eq!(response["nonce"], "0x1");
+    assert_eq!(response["balance"], "0x0");
+    assert_eq!(decoded.balance, U256::zero());
+
+    // Code-hash leaf: value is the snapshot's (keccak) code hash.
+    let code_leaf = &response["binaryAccountProof"]["codeHash"];
+    let code_key = unhex(code_leaf["treeKey"].as_str().unwrap());
+    assert_eq!(code_key, get_tree_key_for_code_hash(&a32));
+    let code_value: [u8; 32] = unhex(code_leaf["value"].as_str().expect("live account leaf"))
+        .try_into()
+        .unwrap();
+    assert_eq!(H256(code_value), code_hash);
+    assert_eq!(response["codeHash"], format!("{code_hash:#x}"));
+    verify_proof(
+        state_root,
+        &code_key,
+        Some(code_value),
+        &proof_nodes(code_leaf),
+    )
+    .expect("code-hash inclusion proof must verify");
+
+    // Storage slot 0: included with the SSTOREd value.
+    let storage_proofs = response["storageProof"].as_array().unwrap();
+    assert_eq!(storage_proofs.len(), 2);
+    let set = &storage_proofs[0];
+    assert_eq!(set["key"], "0x0");
+    assert_eq!(set["value"], "0xbeef");
+    let set_key = unhex(set["treeKey"].as_str().unwrap());
+    assert_eq!(set_key, get_tree_key_for_storage_slot(&a32, U256::zero()));
+    verify_proof(
+        state_root,
+        &set_key,
+        Some(slot_value.to_big_endian()),
+        &proof_nodes(set),
+    )
+    .expect("set-slot inclusion proof must verify");
+
+    // Storage slot 1: zero value carries an exclusion proof.
+    let unset = &storage_proofs[1];
+    assert_eq!(unset["key"], "0x1");
+    assert_eq!(unset["value"], "0x0");
+    let unset_key = unhex(unset["treeKey"].as_str().unwrap());
+    assert_eq!(unset_key, get_tree_key_for_storage_slot(&a32, U256::one()));
+    verify_proof(state_root, &unset_key, None, &proof_nodes(unset))
+        .expect("unset-slot exclusion proof must verify");
+
+    // -- Nonexistent account: null leaves, verifiable exclusions --
+    let ghost = Address::from_low_u64_be(0xdead_beef);
+    let response = get_proof(&context, ghost, "[]").await;
+    assert_eq!(response["balance"], "0x0");
+    assert_eq!(response["nonce"], "0x0");
+    assert_eq!(response["codeHash"], format!("{:#x}", H256::zero()));
+    let g32 = address20_to_address32(ghost);
+    for (leaf, key) in [
+        ("basicData", get_tree_key_for_basic_data(&g32)),
+        ("codeHash", get_tree_key_for_code_hash(&g32)),
+    ] {
+        let entry = &response["binaryAccountProof"][leaf];
+        assert!(entry["value"].is_null(), "{leaf} must be absent");
+        assert_eq!(unhex(entry["treeKey"].as_str().unwrap()), key);
+        verify_proof(state_root, &key, None, &proof_nodes(entry))
+            .unwrap_or_else(|e| panic!("{leaf} exclusion proof must verify: {e}"));
+    }
+}

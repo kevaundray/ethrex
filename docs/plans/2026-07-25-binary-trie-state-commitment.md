@@ -643,8 +643,16 @@ teaching the dev block producer FCUv4/getPayloadV6 for Amsterdam — a
 fork-version gap independent of the flag; the unflagged Amsterdam twin
 fixture failed identically).
 
-**Limitation remaining: `eth_getProof`.** Unpatched (proofs over the
-binary trie are out of scope; it would prove against the wrong trie).
+**Limitation LIFTED: `eth_getProof`.** Under the flag the method now
+serves per-tree-key binary-trie proofs (experimental `pbt-getproof-v1`
+shape) generated from the block's `PbtState` snapshot via the Seam B
+API `PbtState::build_trie` and verifiable statelessly with
+`ethrex_binary_trie::trie::verify_proof`. See
+`docs/eip-draft-pbt-eth-getproof.md` (format) and
+`docs/binary-trie-getproof-investigation.md` (design record). Blocks
+whose in-memory snapshot is gone (restart, future pruning) error
+clearly rather than proving against the wrong trie; flag-off the MPT
+proof path is untouched.
 
 **Limitation: in-memory registries.** Both registries (`pbt_states`,
 `mpt_lookup_roots`) are in-memory only:

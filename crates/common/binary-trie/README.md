@@ -49,10 +49,23 @@ stays the lookup structure. See
 `docs/plans/2026-07-25-binary-trie-state-commitment.md` (including its
 "Implementation notes (as-built)" section) for scope and limitations.
 
+### Proofs
+
+Per-key proofs EXIST: `BinaryTrie::prove` returns the ordered node
+preimages along a key's walk (inclusion and exclusion from the same
+walk) and `trie::proof::verify_proof` checks them statelessly against
+a root. `eth_getProof` serves them under the flag in the experimental
+`pbt-getproof-v1` response shape — see
+`docs/eip-draft-pbt-eth-getproof.md` (format spec, explicitly interim
+until EIP-8297 standardizes a witness format) and
+`docs/binary-trie-getproof-investigation.md` (design record). With no
+hash caching, `prove` is O(trie size) per call — experimental scale
+only.
+
 ### Non-goals (today)
 
 No persistence/`TrieDB` backing, no hash caching, no deletion, no
-proofs, no witness/sync/`eth_getProof` support. The integration above
+witness/sync support, no stem-level multiproofs. The integration above
 recomputes roots by full re-embed per block; incremental maintenance
 and the rest are deferred (see the plan doc's Phase 2 roadmap).
 
