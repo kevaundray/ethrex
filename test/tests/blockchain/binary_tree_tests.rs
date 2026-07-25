@@ -684,15 +684,13 @@ async fn binary_tree_mpt_lookup_serves_account_state() {
 
 /// True restart simulation (RocksDB): block data and the on-disk MPT base
 /// survive a clean shutdown + reopen, but the in-memory `PbtState` /
-/// MPT-lookup-root registries do not. Importing a block on top of a
-/// pre-restart parent must fail with the documented missing-registry
-/// error, and recovery-by-replay from genesis (what a re-import does)
-/// must reconstruct the registries and let the import proceed.
-///
-/// Note the reopened store does not even re-seed the genesis registry
-/// entries (`add_initial_state` early-returns on a matching stored
-/// genesis), so the replay leg re-seeds them from captured values exactly
-/// as a fresh-datadir genesis init would derive them.
+/// MPT-lookup-root registries do not. `add_initial_state` on the reopened
+/// datadir must re-seed the GENESIS registry entries itself (its
+/// matching-genesis early return re-derives them from the genesis file),
+/// while entries for blocks past genesis stay lost: importing a block on
+/// top of a pre-restart parent must fail with the documented
+/// missing-registry error, and recovery-by-replay from genesis (what a
+/// re-import does) must reconstruct them and let the import proceed.
 #[cfg(feature = "rocksdb")]
 #[tokio::test]
 async fn binary_tree_restart_loses_registries_and_replay_recovers() {
@@ -765,13 +763,31 @@ async fn binary_tree_restart_loses_registries_and_replay_recovers() {
         .expect("boot on existing datadir");
     let blockchain = Blockchain::default_with_store(store.clone());
 
-    // Block data survived the restart; the in-memory registries did not.
+    // Block data survived the restart; the in-memory registries did not —
+    // except the genesis entries, which `add_initial_state` re-derives from
+    // the genesis file on its matching-genesis early return (exactly what a
+    // fresh-datadir init would have seeded).
     assert!(
         store
             .get_block_header_by_hash(blocks[1].hash())
             .unwrap()
             .is_some(),
         "block 2 header must survive the restart on disk"
+    );
+    assert_eq!(
+        store
+            .get_pbt_state(genesis_hash)
+            .unwrap()
+            .expect("reopen must re-seed the genesis PbtState snapshot")
+            .compute_root()
+            .unwrap(),
+        genesis_pbt.compute_root().unwrap(),
+        "the re-seeded genesis snapshot must match the pre-restart one"
+    );
+    assert_eq!(
+        store.get_mpt_lookup_root(genesis_hash).unwrap(),
+        Some(genesis_lookup),
+        "reopen must re-seed the genesis MPT lookup root"
     );
     assert!(
         store.get_pbt_state(blocks[1].hash()).unwrap().is_none(),
@@ -796,13 +812,9 @@ async fn binary_tree_restart_loses_registries_and_replay_recovers() {
         "expected the missing-registry restart error, got: {err:?}"
     );
 
-    // Recovery = re-import from genesis: seed the genesis registry entries
-    // (fresh-datadir genesis init derives exactly these) and replay the
-    // chain; the registries are re-derived block by block.
-    store.put_pbt_state(genesis_hash, genesis_pbt).unwrap();
-    store
-        .put_mpt_lookup_root(genesis_hash, genesis_lookup)
-        .unwrap();
+    // Recovery = re-import from genesis: the genesis entries are already
+    // re-seeded by the reopen (asserted above), so replaying the chain is
+    // all that is needed; the registries are re-derived block by block.
     for block in &blocks {
         blockchain
             .add_block(block.clone())

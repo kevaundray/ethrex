@@ -829,6 +829,15 @@ impl Genesis {
                 .compute_root()
                 .expect("genesis alloc must satisfy binary-tree constraints (balances < 2^128)");
         }
+        self.compute_mpt_state_root()
+    }
+
+    /// The MPT root of the genesis alloc, regardless of what the header
+    /// commits to. Identical to [`Genesis::compute_state_root`] with the
+    /// binary-tree flag off; under the flag the header carries the
+    /// binary-tree root instead, and this is the root under which the MPT
+    /// lookup structure is stored (the store's side-registry entry).
+    pub fn compute_mpt_state_root(&self) -> H256 {
         let iter = self.alloc.iter().map(|(addr, account)| {
             (
                 keccak_hash(addr).to_vec(),

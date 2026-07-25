@@ -2602,6 +2602,32 @@ impl Store {
         Ok(())
     }
 
+    /// Experimental EIP-8297: derives the genesis `PbtState` snapshot from
+    /// the alloc, verifies it reproduces the genesis header's (binary-tree)
+    /// state root, and registers it. Shared by fresh-datadir init and the
+    /// matching-genesis reopen path, which must re-seed the in-memory
+    /// registry entries a restart wiped.
+    ///
+    /// The header root comes from this same `from_genesis_alloc` +
+    /// `compute_root` pipeline, so the mismatch check is a
+    /// funnel-consistency guard against the two paths diverging in future
+    /// edits, not independent verification.
+    fn seed_genesis_pbt_snapshot(
+        &self,
+        genesis: &Genesis,
+        genesis_hash: BlockHash,
+        header_state_root: H256,
+    ) -> Result<(), StoreError> {
+        let pbt_state = PbtState::from_genesis_alloc(&genesis.alloc);
+        let pbt_root = pbt_state.compute_root()?;
+        if pbt_root != header_state_root {
+            return Err(StoreError::Custom(format!(
+                "binary-tree genesis root mismatch: computed {pbt_root:#x} but the genesis header commits to {header_state_root:#x}"
+            )));
+        }
+        self.put_pbt_state(genesis_hash, pbt_state)
+    }
+
     /// Records the MPT root under which `block_hash`'s state is persisted.
     /// Only meaningful under `ChainConfig::enable_binary_tree_at_genesis`,
     /// where the header's `state_root` commits to the binary-tree root and
@@ -2713,10 +2739,29 @@ impl Store {
                     stored_genesis = %header.hash(),
                     "Skipping genesis state validation; trusting the genesis header and state already stored in the datadir"
                 );
+                // Experimental EIP-8297: no registry re-seeding here — the
+                // genesis file's alloc is not trusted to describe the stored
+                // state (it is typically empty in this flow), so nothing can
+                // be derived. A flagged skip-validation datadir needs offline
+                // seeding via `put_pbt_state` / `put_mpt_lookup_root`.
                 return Ok(());
             }
             Some(header) if header.hash() == genesis_hash => {
                 info!("Received genesis file matching a previously stored one, nothing to do");
+                // Experimental EIP-8297: the PbtState / MPT-lookup registries
+                // are in-memory and did not survive the restart, so a reopened
+                // datadir must re-seed the genesis entries (blocks past
+                // genesis still require replay — see the missing-entry error
+                // in `mpt_state_root_for_header`). Same derivations as the
+                // fresh-datadir path below.
+                if genesis.config.enable_binary_tree_at_genesis {
+                    self.seed_genesis_pbt_snapshot(
+                        &genesis,
+                        genesis_hash,
+                        genesis_block.header.state_root,
+                    )?;
+                    self.put_mpt_lookup_root(genesis_hash, genesis.compute_mpt_state_root())?;
+                }
                 return Ok(());
             }
             Some(_) => {
@@ -2736,19 +2781,11 @@ impl Store {
         // structure, but under the flag the header's state_root commits to
         // the binary-tree root.
         if genesis.config.enable_binary_tree_at_genesis {
-            let pbt_state = PbtState::from_genesis_alloc(&genesis.alloc);
-            let pbt_root = pbt_state.compute_root()?;
-            // The header root comes from this same from_genesis_alloc +
-            // compute_root pipeline, so this is a funnel-consistency guard
-            // against the two paths diverging in future edits, not
-            // independent verification.
-            if pbt_root != genesis_block.header.state_root {
-                return Err(StoreError::Custom(format!(
-                    "binary-tree genesis root mismatch: computed {pbt_root:#x} but the genesis header commits to {:#x}",
-                    genesis_block.header.state_root
-                )));
-            }
-            self.put_pbt_state(genesis_hash, pbt_state)?;
+            self.seed_genesis_pbt_snapshot(
+                &genesis,
+                genesis_hash,
+                genesis_block.header.state_root,
+            )?;
         }
 
         // Store genesis accounts
