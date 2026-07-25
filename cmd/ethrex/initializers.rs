@@ -403,14 +403,12 @@ pub async fn init_dev_network(
 ) {
     info!("Running in DEV_MODE");
 
-    let head_block_hash = {
-        let current_block_number = store.get_latest_block_number().await.unwrap();
-        store
-            .get_canonical_block_hash(current_block_number)
-            .await
-            .unwrap()
-            .unwrap()
-    };
+    let head_block_number = store.get_latest_block_number().await.unwrap();
+    let head_block_hash = store
+        .get_canonical_block_hash(head_block_number)
+        .await
+        .unwrap()
+        .unwrap();
 
     let max_tries = 3;
 
@@ -423,6 +421,8 @@ pub async fn init_dev_network(
         url,
         read_jwtsecret_file(&opts.authrpc_jwtsecret),
         head_block_hash,
+        head_block_number,
+        store.get_chain_config(),
         max_tries,
         1000,
         ethrex_common::Address::default(),
