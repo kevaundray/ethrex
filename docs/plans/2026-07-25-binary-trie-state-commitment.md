@@ -758,6 +758,10 @@ past `DB_COMMIT_THRESHOLD`, replay-from-genesis recovery is
 impossible and only offline seeding (`put_pbt_state` /
 `put_mpt_lookup_root`) remains. Short-lived devnets restart fine;
 anything long-lived needs the Upgrade 2 persistence story.
+Additionally, `--experimental.binary-tree-delay` is not persisted or
+genesis-hash-enforced: every boot must re-supply the identical delay
+(kurtosis `el_extra_params` does this naturally), or the node reopens
+unscheduled and fails loudly at the first post-flip block.
 
 **Fast devnet — the payoff.**
 `fixtures/networks/binary-tree-devnet-fast.yaml` is a

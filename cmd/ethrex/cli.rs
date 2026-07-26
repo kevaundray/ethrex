@@ -189,7 +189,10 @@ pub struct Options {
                      binary trie from genesis. A relative delay (not an absolute timestamp) is \
                      what makes this usable from stock genesis generators (e.g. kurtosis \
                      el_extra_params) that don't emit the custom field. Rejected if the \
-                     genesis JSON already sets `binaryTreeTime`. Mutually exclusive with \
+                     genesis JSON already sets `binaryTreeTime`. The schedule is NOT \
+                     persisted or genesis-hash-enforced: re-supply the identical delay on \
+                     every boot, or the node reopens unscheduled and fails loudly at the \
+                     first post-flip block. Mutually exclusive with \
                      --experimental.binary-tree.",
         help_heading = "Node options",
         env = "ETHREX_EXPERIMENTAL_BINARY_TREE_DELAY"
