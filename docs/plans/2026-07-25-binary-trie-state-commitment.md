@@ -784,6 +784,14 @@ unscheduled and fails loudly at the first post-flip block.
    computed (`PbtState::compute_root`, spec-conformance-locked), so
    this implementation doubles as the oracle for that future work.
 
+Corollary guard: `--syncmode snap` (the L1 default) is refused at
+startup on any scheduled chain (`validate_sync_mode` in
+`cmd/ethrex/initializers.rs`, after the CLI overrides finalize the
+schedule) — snap sync is MPT-shaped, and a post-flip pivot root
+addresses no MPT; the error names the fix (`--syncmode full`) rather
+than silently switching modes. Lifted when PBT snap sync (planned
+separately) lands.
+
 **Fast devnet — the payoff.**
 `fixtures/networks/binary-tree-devnet-fast.yaml` is a
 merged-from-genesis config (package defaults: altair..fulu all at

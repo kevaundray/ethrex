@@ -8,7 +8,7 @@ use crate::{
 };
 use ethrex_blockchain::{Blockchain, BlockchainOptions, BlockchainType};
 use ethrex_common::fd_limit::raise_fd_limit;
-use ethrex_common::types::Genesis;
+use ethrex_common::types::{ChainConfig, Genesis};
 use ethrex_config::networks::Network;
 use ethrex_rpc::WebSocketConfig;
 
@@ -771,6 +771,32 @@ fn apply_binary_tree_overrides(genesis: &mut Genesis, opts: &Options) -> eyre::R
     Ok(())
 }
 
+/// Refuses snap sync on a binary-tree-scheduled chain, loudly, at startup.
+///
+/// Snap sync is MPT-shaped and binary-tree-unaware: it pivots on a recent
+/// header and downloads the trie behind its `state_root`, but on a chain
+/// with `binaryTreeTime` set a post-flip `state_root` is a PBT root that
+/// addresses no MPT, so the download would hang or fail undebuggably.
+/// No auto-fallback to full sync — silent mode switches surprise operators;
+/// the error names the fix instead. PBT snap sync is tracked separately;
+/// until it exists, full sync (which is binary-tree aware) is the only
+/// supported mode on a scheduled chain.
+///
+/// Called with the FINALIZED chain config (after
+/// [`apply_binary_tree_overrides`], so both CLI activation flags and a
+/// genesis-JSON `binaryTreeTime` are covered) and the EFFECTIVE sync mode
+/// (`--dev` never p2p-syncs and always runs full, so it must not trip this).
+fn validate_sync_mode(config: &ChainConfig, syncmode: &SyncMode) -> eyre::Result<()> {
+    if config.binary_tree_scheduled() && *syncmode == SyncMode::Snap {
+        return Err(eyre::eyre!(
+            "snap sync is not supported on a binary-tree-scheduled chain (binaryTreeTime is set): \
+             snap sync downloads the MPT behind a pivot state root, but a post-flip state root \
+             is a binary-trie root that addresses no MPT; restart with --syncmode full"
+        ));
+    }
+    Ok(())
+}
+
 pub async fn init_l1(
     opts: Options,
     log_filter_handler: Option<reload::Handle<EnvFilter, Registry>>,
@@ -788,6 +814,14 @@ pub async fn init_l1(
 
     let mut genesis = network.get_genesis()?;
     apply_binary_tree_overrides(&mut genesis, &opts)?;
+    // `--dev` never p2p-syncs and its SyncManager is forced to full (see
+    // `init_rpc_api`), so validate the same effective mode it will run with.
+    let effective_syncmode = if opts.dev {
+        &SyncMode::Full
+    } else {
+        &opts.syncmode
+    };
+    validate_sync_mode(&genesis.config, effective_syncmode)?;
     display_chain_initialization(&genesis);
     debug!("Preloading KZG trusted setup");
     ethrex_crypto::kzg::warm_up_trusted_setup();
@@ -1121,9 +1155,12 @@ pub async fn regenerate_head_state(
 
 #[cfg(test)]
 mod tests {
-    use super::{apply_binary_tree_overrides, resolve_p2p_endpoints, validate_rpc_addrs};
+    use super::{
+        apply_binary_tree_overrides, resolve_p2p_endpoints, validate_rpc_addrs, validate_sync_mode,
+    };
     use crate::cli::Options;
-    use ethrex_common::types::Genesis;
+    use ethrex_common::types::{ChainConfig, Genesis};
+    use ethrex_p2p::sync::SyncMode;
     use std::net::{IpAddr, SocketAddr};
 
     fn ip(s: &str) -> IpAddr {
@@ -1196,6 +1233,33 @@ mod tests {
         apply_binary_tree_overrides(&mut unflagged, &Options::default())
             .expect("no flags is a no-op");
         assert_eq!(unflagged.config.binary_tree_time, None);
+    }
+
+    /// Snap sync is MPT-shaped and binary-tree-unaware: on a scheduled chain
+    /// it would pivot on a header whose post-flip `state_root` is a PBT root
+    /// addressing no MPT — an undebuggable hang. Until PBT snap sync exists,
+    /// scheduled + snap must be a hard startup error naming the fix
+    /// (`--syncmode full`). Control arms: full sync on a scheduled chain and
+    /// snap sync on an unscheduled chain (today's default) must both start.
+    #[test]
+    fn binary_tree_scheduled_chain_refuses_snap_sync() {
+        let scheduled = ChainConfig {
+            binary_tree_time: Some(1_700_000_000),
+            ..Default::default()
+        };
+
+        let err = validate_sync_mode(&scheduled, &SyncMode::Snap)
+            .expect_err("a binary-tree-scheduled chain must refuse snap sync")
+            .to_string();
+        assert!(
+            err.contains("--syncmode full"),
+            "error must tell the operator the fix (--syncmode full), got: {err}"
+        );
+
+        validate_sync_mode(&scheduled, &SyncMode::Full)
+            .expect("full sync on a scheduled chain must start");
+        validate_sync_mode(&ChainConfig::default(), &SyncMode::Snap)
+            .expect("snap sync on an unscheduled chain must start");
     }
 
     /// The default layout (distinct ports) must validate.
