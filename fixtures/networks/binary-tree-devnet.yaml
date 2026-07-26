@@ -9,6 +9,10 @@
 #
 # Run: make localnet KURTOSIS_CONFIG_FILE=./fixtures/networks/binary-tree-devnet.yaml
 #
+# Prefer binary-tree-devnet-fast.yaml (merged-from-genesis, activation via
+# --experimental.binary-tree-delay) unless you specifically need genesis-time
+# activation; it skips the fork ladder below entirely.
+#
 # Notes:
 # - The PBT commitment re-embeds the full flat state per block (experimental,
 #   O(state) per block) and snapshots live in memory, so keep spam throughput
