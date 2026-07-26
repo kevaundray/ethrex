@@ -747,6 +747,22 @@ pub async fn init_l1(
         );
         genesis.config.enable_binary_tree_at_genesis = true;
     }
+    if let Some(delay) = opts.experimental_binary_tree_delay {
+        // Same effect as `binaryTreeTime` in the genesis JSON, applied before
+        // the genesis hash is computed so every node given the same genesis
+        // file and delay derives the identical schedule. clap's
+        // `conflicts_with` only guards the two CLI flags against each other; a
+        // genesis JSON that already sets `enableBinaryTreeAtGenesis` combined
+        // with this flag is rejected by `add_initial_state`'s bool+time
+        // conflict guard.
+        let binary_tree_time = genesis.timestamp.saturating_add(delay);
+        warn!(
+            "EXPERIMENTAL: scheduling the EIP-8297 binary-trie commitment flip at \
+             timestamp {binary_tree_time} (genesis timestamp + {delay}s, \
+             --experimental.binary-tree-delay)"
+        );
+        genesis.config.binary_tree_time = Some(binary_tree_time);
+    }
     display_chain_initialization(&genesis);
     debug!("Preloading KZG trusted setup");
     ethrex_crypto::kzg::warm_up_trusted_setup();
