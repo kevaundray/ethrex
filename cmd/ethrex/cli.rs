@@ -165,7 +165,8 @@ pub struct Options {
                      JSON; exists so stock genesis generators (e.g. kurtosis/ethereum-package) \
                      can run binary-tree devnets without emitting the custom field. Every node \
                      on the network must agree on it — nodes that disagree diverge at the \
-                     genesis hash. Activation is genesis-only.",
+                     genesis hash. Activation is genesis-only; to flip mid-chain instead, use \
+                     the scheduled alternative --experimental.binary-tree-delay.",
         help_heading = "Node options",
         env = "ETHREX_EXPERIMENTAL_BINARY_TREE"
     )]
@@ -176,14 +177,16 @@ pub struct Options {
         conflicts_with = "experimental_binary_tree",
         help = "EXPERIMENTAL: schedule the EIP-8297 commitment flip at genesis timestamp + delay",
         long_help = "EXPERIMENTAL: sets `binaryTreeTime = genesis.timestamp + delay` on the \
-                     loaded genesis before the genesis hash is computed, so every node given \
-                     the same genesis file and delay derives the identical schedule — which is \
+                     loaded genesis before genesis processing. Unlike \
+                     --experimental.binary-tree this does NOT change the genesis hash (genesis \
+                     and pre-flip blocks stay MPT-committed), but the scheduled time joins the \
+                     fork id, so ALL nodes must launch with the same delay (and the same \
+                     genesis) or they split at the flip. The chain is MPT-committed until the \
+                     flip and Partitioned-Binary-Tree-committed after; nodes shadow-track the \
+                     binary trie from genesis. A relative delay (not an absolute timestamp) is \
                      what makes this usable from stock genesis generators (e.g. kurtosis \
-                     el_extra_params) that don't emit the custom field. The chain is \
-                     MPT-committed until the flip and Partitioned-Binary-Tree-committed after; \
-                     nodes shadow-track the binary trie from genesis (see \
-                     `ChainConfig::binary_tree_time` docs). Mutually exclusive with \
-                     --experimental.binary-tree.",
+                     el_extra_params) that don't emit the custom field. Mutually exclusive \
+                     with --experimental.binary-tree.",
         help_heading = "Node options",
         env = "ETHREX_EXPERIMENTAL_BINARY_TREE_DELAY"
     )]

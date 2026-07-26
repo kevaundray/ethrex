@@ -28,7 +28,8 @@ use ethrex_l2_rpc::signer::{LocalSigner, Signer};
 use tokio_util::sync::CancellationToken;
 
 #[cfg(feature = "rocksdb")]
-use ethrex_storage::{EngineType, Store};
+use ethrex_storage::EngineType;
+use ethrex_storage::Store;
 
 use super::binary_tree_helpers::{
     assert_binary_snapshots, build_and_import_transfers, build_block, load_genesis_fixture,
@@ -38,7 +39,7 @@ use super::binary_tree_helpers::{
 
 /// Build a chain of `n` blocks under the binary-tree flag on a fresh
 /// in-memory store. Returns the store and the built blocks.
-async fn build_and_import_chain(n: u64) -> (ethrex_storage::Store, Blockchain, Vec<Block>) {
+async fn build_and_import_chain(n: u64) -> (Store, Blockchain, Vec<Block>) {
     let sk = test_secret_key();
     let sender = sender_from_key(&sk);
     let signer: Signer = LocalSigner::new(sk).into();

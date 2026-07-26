@@ -183,7 +183,7 @@ async fn transition_boundary_commits_full_state() {
 /// pre-activation block and a corrupted binary root on the first active
 /// block are both rejected with `StateRootMismatch`.
 #[tokio::test]
-async fn pre_activation_blocks_validate_mpt() {
+async fn validation_is_per_block_across_the_boundary() {
     let (_store, _blockchain, blocks) = build_scheduled_chain(3).await;
 
     // Import into a fresh store from the same scheduled genesis.
