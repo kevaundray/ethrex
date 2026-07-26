@@ -763,6 +763,27 @@ genesis-hash-enforced: every boot must re-supply the identical delay
 (kurtosis `el_extra_params` does this naturally), or the node reopens
 unscheduled and fails loudly at the first post-flip block.
 
+**Transition modes — scope boundary.** Three distinct meanings of
+"transition", with different status:
+1. **Commitment flip over dual-tracked state (SHIPPED):** shadow
+   tracking accumulates the flat state from genesis, so the flip block
+   commits the full state with no conversion event. Requires the node
+   to have processed the chain from genesis (devnets, full sync).
+2. **Offline conversion/seeding (SEAMED, tool pending):** for nodes
+   that cannot replay, `put_pbt_state`/`put_mpt_lookup_root` accept an
+   externally materialized flat state (exercised by the restart
+   recovery tests); Phase 2 Upgrade 2's persisted flat tables become
+   the exportable artifact. The conversion tool itself is not built.
+3. **In-protocol gradual conversion (NOT DESIGNED — upstream gap):**
+   the mainnet-credible mechanism (cf. verkle's EIP-7748: bounded
+   per-block conversion batches as consensus, dual-tree reads) is
+   unspecified by EIP-7864/8297 and absent from EELS. Deliberately not
+   built ahead of the EIP. Compatibility note: any future conversion
+   mechanism's correctness target is already pinned here — the
+   converted state's root must equal what shadow tracking would have
+   computed (`PbtState::compute_root`, spec-conformance-locked), so
+   this implementation doubles as the oracle for that future work.
+
 **Fast devnet — the payoff.**
 `fixtures/networks/binary-tree-devnet-fast.yaml` is a
 merged-from-genesis config (package defaults: altair..fulu all at
