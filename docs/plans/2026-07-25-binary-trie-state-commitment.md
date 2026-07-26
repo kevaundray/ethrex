@@ -816,3 +816,21 @@ a live post-flip proof verified OFFLINE against the block-10 header
 root via the `verify_live_proof` example; a post-flip EIP-1559
 transfer mined with identical reads on all nodes; zero invalid
 fork-choice lines in EL logs.
+
+**Re-verification with the snap guard + restart catch-up
+(2026-07-26, image `575eb1c8`).** Same fast config re-run after the
+snap-sync startup guard landed (`ce75e8b1`) and the scheduled devnet
+yamls pinned `--syncmode=full` (`575eb1c8`). All prior checks
+reproduced: flip at block 10 exactly, state roots identical across
+all 3 nodes at six sampled heights spanning the boundary, getProof
+shape flip (legacy at 9, `pbt-getproof-v1` post-flip), post-flip
+transfer mined with an agreed receipt (gas limit 500k, over the
+EIP-8037 floor); the guard stayed silent on every node (validating
+the yaml pin) and each EL logged the `BinaryTree: @<flip-ts>`
+schedule. New coverage — the restart contract, live: one EL stopped
+at post-flip height 36, survivors advanced 22 blocks, restart
+re-supplied the delay flag via kurtosis, the node logged the
+schedule WARN again, replayed blocks 0-37 in ~150ms (in-memory
+registries re-derived), then full-synced to head in 12s with exact
+root parity at the flip block, the stop height, and head; zero
+panic/"Unknown state"/invalid-fork-choice/ERROR lines post-restart.
