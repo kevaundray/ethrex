@@ -172,8 +172,8 @@ pub async fn apply_fork_choice(
 
     // If the state can't be constructed from the DB, the caller starts a sync
     // toward the head instead of ignoring the FCU. The probe resolves the
-    // header's MPT lookup root first (under the experimental binary-tree flag
-    // the header's `state_root` is the binary-trie root, which matches no MPT
+    // header's MPT lookup root first (under the experimental binary-tree
+    // commitment the header's `state_root` is the binary-trie root, which matches no MPT
     // layer; a missing registry entry counts as unreachable).
     // TODO(#5564): handle arbitrary reorgs
     if !store.has_reconstructible_state(&link_header)? {

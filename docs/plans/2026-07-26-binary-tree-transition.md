@@ -2,6 +2,14 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
+**Update (2026-07-26): `enableBinaryTreeAtGenesis` removed post-planning.**
+In a user-approved consolidation after this plan was written, the boolean
+config field was removed; `binaryTreeTime` is the single activation field,
+with a time at or before the genesis timestamp (canonically
+`binaryTreeTime: 0`) as the genesis-activation spelling. The two-field
+predicate definitions and bool mentions in the plan text below are
+historical.
+
 **Goal:** Mid-chain activation of the EIP-8297 binary-tree commitment: a `binaryTreeTime` timestamp in the chain config schedules the flip, nodes shadow-track `PbtState` from genesis, and the first block at/after the timestamp commits the *full* state to the PBT — making merged-from-genesis (Fulu-at-epoch-0) devnets work with a stock genesis generator.
 
 **Architecture:** Shadow carry-over as the consensus rule, exactly as designed in the Phase 2 roadmap of `docs/plans/2026-07-25-binary-trie-state-commitment.md`: when the commitment is *scheduled*, every node maintains the `PbtState` snapshot chain from genesis (the identical clone/apply/store loop `store_block` already runs when flagged — no new machinery), and once *active* it additionally computes/validates PBT roots in headers. Genesis-activation (`enableBinaryTreeAtGenesis`) remains as the degenerate case and stays fully supported. Pre-activation blocks keep MPT roots in headers and stay addressable WITHOUT registries (restart-friendly); post-activation headers resolve the MPT through the existing lookup-root registry.

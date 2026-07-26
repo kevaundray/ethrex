@@ -1234,7 +1234,7 @@ async fn try_execute_payload(
     // persisting it via `set_latest_valid_ancestor`). The parent block being
     // entirely absent is handled as `ParentNotFound` by `add_block` below.
     // (`has_reconstructible_state` resolves the parent's MPT lookup root
-    // first — under the experimental binary-tree flag the header's
+    // first — under the experimental binary-tree commitment the header's
     // `state_root` is the binary-trie root, and a missing registry entry
     // means the parent state is just as unreachable.)
     if let Some(parent_header) = storage.get_block_header_by_hash(block.header.parent_hash)?

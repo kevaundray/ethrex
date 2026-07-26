@@ -1070,8 +1070,8 @@ pub async fn regenerate_head_state(
     let mut current_last_header = last_header;
 
     // Find the last block with a known state root. The probe resolves the
-    // header's MPT lookup root first: under the experimental binary-tree flag
-    // the header commits to the binary-trie root, and only blocks whose
+    // header's MPT lookup root first: under the experimental binary-tree
+    // commitment the header commits to the binary-trie root, and only blocks whose
     // registry entry survived (genesis is reseeded on every boot) anchor the
     // walk — the replay below re-derives the registry entries for the rest.
     while !store.has_reconstructible_state(&current_last_header)? {
@@ -1163,13 +1163,21 @@ mod tests {
         assert_eq!(genesis.config.binary_tree_time, Some(genesis.timestamp));
 
         // JSON time already present: both flags are hard errors, naming the
-        // field and its value.
-        for opts in [&genesis_flag, &delay_flag] {
+        // field, its value, and the offending flag EXACTLY (`starts_with`
+        // because the delay flag contains the genesis flag as a prefix, so a
+        // bare `contains` would pass trivially on the wrong flag).
+        for (opts, expected_flag) in [
+            (&genesis_flag, "--experimental.binary-tree"),
+            (&delay_flag, "--experimental.binary-tree-delay"),
+        ] {
             let err = apply_binary_tree_overrides(&mut genesis, opts)
                 .expect_err("a genesis JSON binaryTreeTime + a CLI flag must be rejected")
                 .to_string();
             assert!(err.contains("binaryTreeTime: 1700000000"), "{err}");
-            assert!(err.contains("--experimental.binary-tree"), "{err}");
+            assert!(
+                err.starts_with(&format!("{expected_flag} conflicts")),
+                "error must name the offending flag exactly ({expected_flag}), got: {err}"
+            );
         }
         // The rejected calls must not have mutated the schedule.
         assert_eq!(genesis.config.binary_tree_time, Some(genesis.timestamp));

@@ -49,7 +49,7 @@ impl StoreVmDatabase {
     ) -> Result<Self, EvmError> {
         // The root under which the block's MPT state is stored: the header's
         // state_root normally, or the side-registry entry under the
-        // experimental binary-tree flag (the header then commits to the
+        // experimental binary-tree commitment (the header then commits to the
         // binary-tree root, which cannot address the MPT).
         let state_root = store
             .mpt_state_root_for_header(&block_header)

@@ -99,7 +99,7 @@ async fn request_bodies_with_retry(
 /// them rather than skip them as "already canonical".
 pub fn is_resume_point(store: &Store, header: &BlockHeader) -> Result<bool, SyncError> {
     // `has_reconstructible_state` resolves the header's MPT lookup root first
-    // (under the experimental binary-tree flag the header commits to the
+    // (under the experimental binary-tree commitment the header commits to the
     // binary-trie root; a missing registry entry means not a resume point).
     Ok(store.is_canonical_sync(header.hash())? && store.has_reconstructible_state(header)?)
 }

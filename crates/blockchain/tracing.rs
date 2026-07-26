@@ -276,9 +276,9 @@ async fn get_missing_state_parents(
         let Some(parent_block) = store.get_block_by_hash(parent_hash).await? else {
             return Err(ChainError::Custom("Parent Block not Found".to_string()));
         };
-        // Resolves the header's MPT lookup root first (binary-tree flag:
-        // header roots are binary-trie roots; missing registry entry ==
-        // state absent, keep walking back).
+        // Resolves the header's MPT lookup root first (binary-tree
+        // commitment: header roots are binary-trie roots; missing registry
+        // entry == state absent, keep walking back).
         if store.has_reconstructible_state(&parent_block.header)? {
             break;
         }

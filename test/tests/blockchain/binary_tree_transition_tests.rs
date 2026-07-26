@@ -328,7 +328,7 @@ async fn pre_activation_headers_resolve_without_registry() {
 /// back with zero replay.
 #[cfg(feature = "rocksdb")]
 #[tokio::test]
-async fn restart_across_boundary_preserves_preflip_reads_and_recovers_by_replay() {
+async fn restart_across_boundary_preserves_durable_preflip_reads_and_recovers_by_replay() {
     let sk = test_secret_key();
     let sender = sender_from_key(&sk);
     let signer: Signer = LocalSigner::new(sk).into();

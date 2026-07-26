@@ -37,7 +37,7 @@ use super::binary_tree_helpers::{
     test_secret_key, transfer_tx,
 };
 
-/// Build a chain of `n` blocks under the binary-tree flag on a fresh
+/// Build a chain of `n` blocks under the binary-tree commitment on a fresh
 /// in-memory store. Returns the store and the built blocks.
 async fn build_and_import_chain(n: u64) -> (Store, Blockchain, Vec<Block>) {
     let sk = test_secret_key();
@@ -51,8 +51,8 @@ async fn build_and_import_chain(n: u64) -> (Store, Blockchain, Vec<Block>) {
     (store, blockchain, blocks)
 }
 
-/// Chain of 3 under the flag: payload building commits the binary root and
-/// import validates + snapshots it, block by block.
+/// Chain of 3 under the commitment: payload building commits the binary root
+/// and import validates + snapshots it, block by block.
 #[tokio::test]
 async fn binary_tree_chain_of_three_commits_binary_roots() {
     let (store, _blockchain, blocks) = build_and_import_chain(3).await;
@@ -120,7 +120,7 @@ async fn binary_tree_corrupted_state_root_rejected() {
     );
 }
 
-/// `add_blocks_in_batch` under the flag must fall back to per-block imports
+/// `add_blocks_in_batch` under the commitment must fall back to per-block imports
 /// (the batch path merkleizes once for the whole range and cannot produce
 /// the required per-block snapshots) with the same postconditions as the
 /// single-block path.
@@ -139,7 +139,7 @@ async fn binary_tree_batch_import_produces_per_block_snapshots() {
         .await;
     assert!(
         result.is_ok(),
-        "batch import under the binary-tree flag should succeed via the per-block fallback — got: {:?}",
+        "batch import under the binary-tree commitment should succeed via the per-block fallback — got: {:?}",
         result.err()
     );
 
@@ -147,8 +147,8 @@ async fn binary_tree_batch_import_produces_per_block_snapshots() {
 }
 
 /// The pipeline import path (`add_block_pipeline`, the engine-API route)
-/// must also maintain per-block snapshots under the flag: the merkleizer is
-/// forced to accumulate the raw account updates that `store_block` needs.
+/// must also maintain per-block snapshots under the commitment: the merkleizer
+/// is forced to accumulate the raw account updates that `store_block` needs.
 #[tokio::test]
 async fn binary_tree_pipeline_import_produces_per_block_snapshots() {
     let (_store_a, _blockchain_a, blocks) = build_and_import_chain(3).await;
