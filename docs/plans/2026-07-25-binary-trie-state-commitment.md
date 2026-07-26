@@ -790,7 +790,10 @@ startup on any scheduled chain (`validate_sync_mode` in
 schedule) — snap sync is MPT-shaped, and a post-flip pivot root
 addresses no MPT; the error names the fix (`--syncmode full`) rather
 than silently switching modes. Lifted when PBT snap sync (planned
-separately) lands.
+separately) lands. Consequence: every scheduled-chain launch config
+must pin the mode — both devnet yamls now carry `--syncmode=full` in
+`el_extra_params` (the prior verified run predated the guard and
+never exercised syncmode).
 
 **Fast devnet — the payoff.**
 `fixtures/networks/binary-tree-devnet-fast.yaml` is a

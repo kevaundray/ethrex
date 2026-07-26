@@ -31,6 +31,9 @@ participants:
     supernode: true
     el_extra_params:
       - "--experimental.binary-tree"
+      # Required on any scheduled chain: ethrex defaults to snap sync, which
+      # is MPT-shaped and refused at startup once binaryTreeTime is set.
+      - "--syncmode=full"
       # Devnet-only: widen the RPC namespace allowlist for test tooling.
       - "--http.api=eth,net,web3,debug,admin,txpool"
 
