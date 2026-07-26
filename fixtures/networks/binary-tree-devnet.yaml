@@ -40,11 +40,10 @@ network_params:
   # the merge happen via TTD=0 at epoch 1, where the CL discovers the terminal
   # block (the flagged EL genesis) from the EL itself at runtime.
   # One-epoch stagger per fork; Fulu by epoch 5 (~8 min at 3s slots).
-  # Tested alternatives: stacking ALL forks at epoch 1 does NOT work — the
-  # merge-transition payload then crosses five fork boundaries in one block
-  # (Fulu payload on a frontier genesis) and gets rejected as INVALID at
-  # import (untriaged; likely an exotic transition edge in EL validation).
-  # The stagger keeps every boundary a single fork step.
+  # Faster variants tested and NOT viable with lighthouse v8.1.3:
+  # - all forks stacked at epoch 1: lighthouse proposer prep fails with
+  #   IncorrectStateVariant on the fast-forwarded (blockless) Fulu state;
+  # - minimal preset: same, plus minimal-image VC sync-gating issues.
   altair_fork_epoch: 0
   bellatrix_fork_epoch: 1
   capella_fork_epoch: 2
