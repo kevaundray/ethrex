@@ -305,6 +305,15 @@ pub struct ChainConfig {
     /// differs.
     #[serde(default)]
     pub enable_binary_tree_at_genesis: bool,
+
+    /// Experimental EIP-8297 commitment activation timestamp. From the
+    /// first block with `timestamp >= binary_tree_time`, headers commit
+    /// Partitioned-Binary-Tree state roots instead of MPT roots; nodes
+    /// shadow-track the flat state from genesis so the flip commits the
+    /// FULL state (consensus rule: carry-over, not empty-start). Not an
+    /// EVM fork: deliberately NOT a `Fork` variant (commitment is
+    /// orthogonal to execution semantics; cf. `verkle_time`).
+    pub binary_tree_time: Option<u64>,
 }
 
 lazy_static::lazy_static! {
@@ -445,6 +454,30 @@ impl ChainConfig {
         self.eip155_block.is_some_and(|num| num <= block_number)
     }
 
+    /// Is the EIP-8297 binary-tree commitment scheduled on this chain
+    /// (whether genesis-activated or timestamp-scheduled)?
+    ///
+    /// Consensus rule: `scheduled ⇒ shadow-track from genesis` — every node
+    /// on a scheduled chain maintains the flat-state (PBT) snapshot chain
+    /// from genesis, so the activation block can commit the FULL state
+    /// (carry-over, not empty-start).
+    pub fn binary_tree_scheduled(&self) -> bool {
+        self.enable_binary_tree_at_genesis || self.binary_tree_time.is_some()
+    }
+
+    /// Is the EIP-8297 binary-tree commitment active at `block_timestamp`?
+    ///
+    /// Consensus rule: `active(block.timestamp) ⇒ the header commits the
+    /// shadow state's Partitioned-Binary-Tree root` (and is validated
+    /// against it); pre-activation headers keep MPT roots. The genesis flag
+    /// is the degenerate "active from genesis" case.
+    pub fn is_binary_tree_active(&self, block_timestamp: u64) -> bool {
+        self.enable_binary_tree_at_genesis
+            || self
+                .binary_tree_time
+                .is_some_and(|time| time <= block_timestamp)
+    }
+
     pub fn display_config(&self) -> String {
         let network = NETWORK_NAMES.get(&self.chain_id).unwrap_or(&"unknown");
         let mut output = format!("Chain ID: {} ({})\n\n", self.chain_id, network);
@@ -457,6 +490,9 @@ impl ChainConfig {
             ("Osaka", self.osaka_time),
             ("Amsterdam", self.amsterdam_time),
             ("Hegota", self.hegota_time),
+            // Not an EVM fork (no `Fork` variant) — the scheduled EIP-8297
+            // commitment flip, displayed alongside the timestamped forks.
+            ("BinaryTree", self.binary_tree_time),
         ];
 
         let active_forks: Vec<_> = post_merge_forks
@@ -704,6 +740,7 @@ impl ChainConfig {
             self.amsterdam_time,
             self.hegota_time,
             self.verkle_time,
+            self.binary_tree_time,
         ]
         .into_iter()
         .flatten()
@@ -919,6 +956,81 @@ mod tests {
         let parsed: ChainConfig = serde_json::from_str(&format!(r#"{{"chainId":1,{dca}}}"#))
             .expect("config without enableBinaryTreeAtGenesis should parse");
         assert!(!parsed.enable_binary_tree_at_genesis);
+    }
+
+    #[test]
+    fn binary_tree_time_schedules_and_activates() {
+        let mut config = ChainConfig::default();
+        assert!(!config.binary_tree_scheduled());
+        assert!(!config.is_binary_tree_active(u64::MAX));
+
+        config.binary_tree_time = Some(1000);
+        assert!(config.binary_tree_scheduled());
+        assert!(!config.is_binary_tree_active(999));
+        assert!(config.is_binary_tree_active(1000));
+        assert!(config.is_binary_tree_active(1001));
+
+        // bool implies both, regardless of timestamp
+        let flagged = ChainConfig {
+            enable_binary_tree_at_genesis: true,
+            ..Default::default()
+        };
+        assert!(flagged.binary_tree_scheduled());
+        assert!(flagged.is_binary_tree_active(0));
+    }
+
+    #[test]
+    fn binary_tree_time_serde_camel_case() {
+        let dca = r#""depositContractAddress":"0x00000000219ab540356cbb839cbe05303d7705fa""#;
+
+        let parsed: ChainConfig =
+            serde_json::from_str(&format!(r#"{{"chainId":1,"binaryTreeTime":1000,{dca}}}"#))
+                .expect("config with binaryTreeTime should parse");
+        assert_eq!(parsed.binary_tree_time, Some(1000));
+
+        // absent from JSON -> None (unscheduled)
+        let parsed: ChainConfig = serde_json::from_str(&format!(r#"{{"chainId":1,{dca}}}"#))
+            .expect("config without binaryTreeTime should parse");
+        assert_eq!(parsed.binary_tree_time, None);
+    }
+
+    #[test]
+    fn binary_tree_time_joins_fork_id_when_scheduled() {
+        use crate::types::ForkId;
+
+        let genesis_header = BlockHeader::default(); // timestamp 0
+
+        let unscheduled = ChainConfig::default();
+        let scheduled = ChainConfig {
+            binary_tree_time: Some(1000),
+            ..Default::default()
+        };
+
+        // gather_forks: a scheduled time strictly after genesis joins the
+        // timestamp-based fork inputs; None contributes nothing.
+        let (_, ts_forks) = scheduled.gather_forks(genesis_header.clone());
+        assert!(
+            ts_forks.contains(&1000),
+            "scheduled binary_tree_time must appear in the fork-id inputs"
+        );
+        let (_, ts_forks) = unscheduled.gather_forks(genesis_header.clone());
+        assert!(
+            ts_forks.is_empty(),
+            "unscheduled config must contribute no timestamp forks"
+        );
+
+        // ForkId: configs differing only in binary_tree_time disagree
+        // pre-activation (fork_next advertises the pending flip)...
+        let scheduled_id = ForkId::new(scheduled, genesis_header.clone(), 0, 0);
+        let unscheduled_id = ForkId::new(unscheduled, genesis_header.clone(), 0, 0);
+        assert_ne!(
+            scheduled_id, unscheduled_id,
+            "scheduled binary_tree_time must alter the fork id"
+        );
+
+        // ...while None == unscheduled: identical configs, identical id.
+        let twin_id = ForkId::new(unscheduled, genesis_header, 0, 0);
+        assert_eq!(unscheduled_id, twin_id);
     }
 
     #[test]
