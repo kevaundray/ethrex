@@ -26,12 +26,12 @@ use ethrex_storage::Store;
 use ethrex_storage::EngineType;
 
 use super::binary_tree_helpers::{
-    assert_binary_snapshots, build_and_import_transfers, load_genesis_fixture, sender_from_key,
-    setup_store_from_genesis, test_recipient, test_secret_key,
+    assert_binary_snapshots, build_and_import_transfers, build_block, load_genesis_fixture,
+    sender_from_key, setup_store_from_genesis, test_recipient, test_secret_key,
 };
-// Only the rocksdb-gated restart test builds a block by hand.
+// Only the rocksdb-gated restart test builds a signed transfer by hand.
 #[cfg(feature = "rocksdb")]
-use super::binary_tree_helpers::{build_block, transfer_tx};
+use super::binary_tree_helpers::transfer_tx;
 
 /// `build_block` stamps `parent.timestamp + 12` on every block, so with
 /// activation at `genesis.timestamp + 36` blocks 1-2 (`+12`, `+24`) are
@@ -314,6 +314,98 @@ async fn pre_activation_headers_resolve_without_registry() {
         None,
         "active headers must resolve only through the registry"
     );
+}
+
+/// Reorg-shaped arrival across the boundary: a PRE-FLIP side block (a
+/// sibling of block 2, built on block 1's state) imported AFTER the flip is
+/// already active at the canonical head must be handled by its OWN
+/// timestamp — MPT-rooted header validated, snapshot shadow-tracked off
+/// the SIDE parent (the registries are keyed by block hash, so forks
+/// work), per-header resolution to its own root — and must leave the
+/// canonical chain untouched. Characterization test: `store_block`
+/// branches on the block's timestamp, never the head's; committed for
+/// regression protection against a future "chain is past the flip ⇒
+/// validate against the binary root" shortcut.
+#[tokio::test]
+async fn reorg_across_the_boundary_imports_preflip_side_blocks() {
+    let (store, blockchain, blocks) = build_scheduled_chain(4).await;
+    let config = store.get_chain_config();
+    // The flip is active at the canonical head.
+    assert!(config.is_binary_tree_active(blocks[3].header.timestamp));
+
+    let head_number = store.get_latest_block_number().await.unwrap();
+    assert_eq!(head_number, 4);
+    let canonical_2 = store.get_canonical_block_hash(2).await.unwrap();
+    assert_eq!(canonical_2, Some(blocks[1].hash()));
+
+    // Build a sibling of block 2 on block 1's state: same height and
+    // (pre-flip) timestamp, different content — the mempool is empty by
+    // now, so the side block carries no transfer.
+    let side = build_block(&store, &blockchain, &blocks[0].header).await;
+    assert_eq!(side.header.number, blocks[1].header.number);
+    assert!(
+        !config.is_binary_tree_active(side.header.timestamp),
+        "side block must be pre-flip by its own timestamp"
+    );
+    assert!(side.body.transactions.is_empty());
+    assert_ne!(side.hash(), blocks[1].hash(), "must be a genuine sibling");
+
+    blockchain.add_block(side.clone()).expect(
+        "a pre-flip side block must import after the flip (per-block timestamp, not head time)",
+    );
+
+    // MPT-rooted, matching its lookup entry, and resolving per-header to
+    // its own root.
+    assert_eq!(
+        store.get_mpt_lookup_root(side.hash()).unwrap(),
+        Some(side.header.state_root),
+        "the side block's header must carry its MPT root"
+    );
+    assert_eq!(
+        store.mpt_state_root_for_header_opt(&side.header).unwrap(),
+        Some(side.header.state_root),
+        "pre-flip side headers resolve to their own root, like any pre-flip header"
+    );
+
+    // Shadow tracking extended the SIDE parent's snapshot, not the head's:
+    // the side lineage saw exactly block 1's single transfer, while the
+    // canonical head has four applied.
+    let side_snapshot = store
+        .get_pbt_state(side.hash())
+        .unwrap()
+        .expect("shadow tracking must snapshot side-fork pre-flip blocks too");
+    assert_ne!(
+        side.header.state_root,
+        side_snapshot.compute_root().unwrap(),
+        "a pre-flip header must not commit the binary root"
+    );
+    assert_eq!(
+        side_snapshot
+            .accounts
+            .get(&test_recipient())
+            .map(|account| account.balance),
+        Some(U256::from(1_000_000u64)),
+        "the side snapshot must extend block 1's lineage (one transfer applied)"
+    );
+    let sender = sender_from_key(&test_secret_key());
+    assert_eq!(
+        side_snapshot
+            .accounts
+            .get(&sender)
+            .map(|account| account.nonce),
+        Some(1),
+        "the side lineage's sender nonce must reflect only block 1's transfer"
+    );
+
+    // The canonical chain is untouched: same head, same canonical hash at
+    // the contested height, and the active blocks' snapshot commitments
+    // still hold.
+    assert_eq!(store.get_latest_block_number().await.unwrap(), head_number);
+    assert_eq!(
+        store.get_canonical_block_hash(2).await.unwrap(),
+        canonical_2
+    );
+    assert_binary_snapshots(&store, &blocks[2..]);
 }
 
 /// True restart simulation across the activation boundary (RocksDB, model
