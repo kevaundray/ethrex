@@ -297,26 +297,18 @@ pub struct ChainConfig {
     #[serde(default)]
     pub enable_verkle_at_genesis: bool,
 
-    /// Experimental EIP-8297 state commitment: when set, genesis and block
-    /// state roots are Partitioned-Binary-Tree roots instead of MPT roots.
-    /// Activation is genesis-only (the degenerate case of the scheduled
-    /// transition — see `binary_tree_time`, mutually exclusive with this
-    /// flag: setting both is rejected at genesis load).
-    /// Does not participate in fork identity: nodes disagreeing on this flag
-    /// already diverge at the genesis hash, since the genesis state root
-    /// differs.
-    #[serde(default)]
-    pub enable_binary_tree_at_genesis: bool,
-
-    /// Experimental EIP-8297 commitment activation timestamp. From the
-    /// first block with `timestamp >= binary_tree_time`, headers commit
-    /// Partitioned-Binary-Tree state roots instead of MPT roots; nodes
-    /// shadow-track the flat state from genesis so the flip commits the
-    /// FULL state (consensus rule: carry-over, not empty-start). Not an
+    /// Experimental EIP-8297 commitment activation timestamp — the single
+    /// activation field. From the first block with `timestamp >=
+    /// binary_tree_time`, headers commit Partitioned-Binary-Tree state
+    /// roots instead of MPT roots; nodes shadow-track the flat state from
+    /// genesis so the flip commits the FULL state (consensus rule:
+    /// carry-over, not empty-start). Activation from genesis is a time at
+    /// or before the genesis timestamp, canonically `binaryTreeTime: 0`
+    /// (at-or-before-genesis times never join the fork id — `gather_forks`
+    /// keeps only times strictly after genesis — the divergence is the
+    /// genesis hash itself, since the genesis state root differs). Not an
     /// EVM fork: deliberately NOT a `Fork` variant (commitment is
-    /// orthogonal to execution semantics; cf. `verkle_time`). Mutually
-    /// exclusive with `enable_binary_tree_at_genesis`: setting both is
-    /// rejected at genesis load.
+    /// orthogonal to execution semantics; cf. `verkle_time`).
     pub binary_tree_time: Option<u64>,
 }
 
@@ -459,44 +451,26 @@ impl ChainConfig {
     }
 
     /// Is the EIP-8297 binary-tree commitment scheduled on this chain
-    /// (whether genesis-activated or timestamp-scheduled)?
+    /// (`binary_tree_time` set — whether at/before genesis or mid-chain)?
     ///
     /// Consensus rule: `scheduled ⇒ shadow-track from genesis` — every node
     /// on a scheduled chain maintains the flat-state (PBT) snapshot chain
     /// from genesis, so the activation block can commit the FULL state
     /// (carry-over, not empty-start).
     pub fn binary_tree_scheduled(&self) -> bool {
-        self.enable_binary_tree_at_genesis || self.binary_tree_time.is_some()
+        self.binary_tree_time.is_some()
     }
 
     /// Is the EIP-8297 binary-tree commitment active at `block_timestamp`?
     ///
     /// Consensus rule: `active(block.timestamp) ⇒ the header commits the
     /// shadow state's Partitioned-Binary-Tree root` (and is validated
-    /// against it); pre-activation headers keep MPT roots. The genesis flag
-    /// is the degenerate "active from genesis" case.
+    /// against it); pre-activation headers keep MPT roots. "Active from
+    /// genesis" is the degenerate case of a time at or before the genesis
+    /// timestamp, spelled `binaryTreeTime: 0` in genesis JSON.
     pub fn is_binary_tree_active(&self, block_timestamp: u64) -> bool {
-        self.enable_binary_tree_at_genesis
-            || self
-                .binary_tree_time
-                .is_some_and(|time| time <= block_timestamp)
-    }
-
-    /// Rejects the ambiguous combination of both EIP-8297 activation
-    /// mechanisms: `enable_binary_tree_at_genesis` means "active from
-    /// genesis", which a scheduled `binary_tree_time` contradicts (unless
-    /// equal to the genesis timestamp — kept simple: any combination is a
-    /// hard error). Enforced at genesis load (`Store::add_initial_state`).
-    pub fn validate_binary_tree_schedule(&self) -> Result<(), String> {
-        if self.enable_binary_tree_at_genesis && self.binary_tree_time.is_some() {
-            return Err(
-                "`enableBinaryTreeAtGenesis` and `binaryTreeTime` are mutually exclusive: \
-                 the flag means active-from-genesis, which a scheduled activation timestamp \
-                 contradicts; set exactly one"
-                    .to_string(),
-            );
-        }
-        Ok(())
+        self.binary_tree_time
+            .is_some_and(|time| time <= block_timestamp)
     }
 
     pub fn display_config(&self) -> String {
@@ -879,8 +853,8 @@ impl Genesis {
 
     pub fn compute_state_root(&self) -> H256 {
         // Experimental EIP-8297: when the commitment is active AT the
-        // genesis timestamp (the genesis flag, or a binary_tree_time <= the
-        // genesis timestamp) the genesis commits to the binary-tree root
+        // genesis timestamp (a binary_tree_time <= the genesis timestamp,
+        // canonically 0) the genesis commits to the binary-tree root
         // instead of the MPT root; a later-scheduled genesis keeps the MPT
         // root until the flip. Genesis construction has no error channel;
         // the only failure is an alloc that violates the binary-tree
@@ -965,22 +939,25 @@ mod tests {
     }
 
     #[test]
-    fn test_enable_binary_tree_at_genesis_flag() {
+    fn binary_tree_time_zero_activates_at_genesis() {
         let config = ChainConfig::default();
-        assert!(!config.enable_binary_tree_at_genesis);
+        assert!(!config.binary_tree_scheduled());
 
         let dca = r#""depositContractAddress":"0x00000000219ab540356cbb839cbe05303d7705fa""#;
 
-        let parsed: ChainConfig = serde_json::from_str(&format!(
-            r#"{{"chainId":1,"enableBinaryTreeAtGenesis":true,{dca}}}"#
-        ))
-        .expect("config with enableBinaryTreeAtGenesis should parse");
-        assert!(parsed.enable_binary_tree_at_genesis);
+        // "Active from genesis" is spelled as a time at/before the genesis
+        // timestamp, canonically `binaryTreeTime: 0`.
+        let parsed: ChainConfig =
+            serde_json::from_str(&format!(r#"{{"chainId":1,"binaryTreeTime":0,{dca}}}"#))
+                .expect("config with binaryTreeTime should parse");
+        assert_eq!(parsed.binary_tree_time, Some(0));
+        assert!(parsed.binary_tree_scheduled());
+        assert!(parsed.is_binary_tree_active(0));
 
-        // absent from JSON -> defaults to false
+        // absent from JSON -> unscheduled
         let parsed: ChainConfig = serde_json::from_str(&format!(r#"{{"chainId":1,{dca}}}"#))
-            .expect("config without enableBinaryTreeAtGenesis should parse");
-        assert!(!parsed.enable_binary_tree_at_genesis);
+            .expect("config without binaryTreeTime should parse");
+        assert!(!parsed.binary_tree_scheduled());
     }
 
     #[test]
@@ -995,13 +972,14 @@ mod tests {
         assert!(config.is_binary_tree_active(1000));
         assert!(config.is_binary_tree_active(1001));
 
-        // bool implies both, regardless of timestamp
-        let flagged = ChainConfig {
-            enable_binary_tree_at_genesis: true,
+        // Genesis activation is the degenerate case: a time at/before the
+        // genesis timestamp (e.g. 0) is scheduled AND active from block 0.
+        let genesis_active = ChainConfig {
+            binary_tree_time: Some(0),
             ..Default::default()
         };
-        assert!(flagged.binary_tree_scheduled());
-        assert!(flagged.is_binary_tree_active(0));
+        assert!(genesis_active.binary_tree_scheduled());
+        assert!(genesis_active.is_binary_tree_active(0));
     }
 
     #[test]
@@ -1059,7 +1037,7 @@ mod tests {
     }
 
     #[test]
-    fn binary_tree_flag_swaps_genesis_state_root_commitment() {
+    fn binary_tree_genesis_activation_swaps_state_root_commitment() {
         use crate::types::PbtState;
 
         let mut alloc: BTreeMap<Address, GenesisAccount> = BTreeMap::new();
@@ -1091,7 +1069,7 @@ mod tests {
 
         let mpt_root = genesis.compute_state_root();
 
-        genesis.config.enable_binary_tree_at_genesis = true;
+        genesis.config.binary_tree_time = Some(0);
         let pbt_root = genesis.compute_state_root();
 
         assert_eq!(
@@ -1099,7 +1077,7 @@ mod tests {
             PbtState::from_genesis_alloc(&genesis.alloc)
                 .compute_root()
                 .expect("test balances fit the 2^128 cap"),
-            "flagged genesis must commit to the binary-tree root"
+            "genesis-activated genesis must commit to the binary-tree root"
         );
         assert_ne!(
             pbt_root, mpt_root,
@@ -1149,43 +1127,10 @@ mod tests {
             "genesis active at its own timestamp must commit the binary root"
         );
 
-        // The bool is the degenerate active-from-genesis case.
-        genesis.config.binary_tree_time = None;
-        genesis.config.enable_binary_tree_at_genesis = true;
+        // Scheduled BEFORE genesis (canonically 0) is equally active at
+        // genesis — the "active from genesis" spelling.
+        genesis.config.binary_tree_time = Some(0);
         assert_eq!(genesis.compute_state_root(), pbt_root);
-    }
-
-    #[test]
-    fn binary_tree_bool_and_time_conflict_rejected() {
-        let conflicting = ChainConfig {
-            enable_binary_tree_at_genesis: true,
-            binary_tree_time: Some(1000),
-            ..Default::default()
-        };
-        let err = conflicting
-            .validate_binary_tree_schedule()
-            .expect_err("bool + time must be rejected as ambiguous");
-        assert!(
-            err.contains("enableBinaryTreeAtGenesis") && err.contains("binaryTreeTime"),
-            "error must name both fields, got: {err}"
-        );
-
-        // Each alone (and neither) is valid.
-        for config in [
-            ChainConfig::default(),
-            ChainConfig {
-                enable_binary_tree_at_genesis: true,
-                ..Default::default()
-            },
-            ChainConfig {
-                binary_tree_time: Some(1000),
-                ..Default::default()
-            },
-        ] {
-            config
-                .validate_binary_tree_schedule()
-                .expect("a single activation mechanism must validate");
-        }
     }
 
     #[test]

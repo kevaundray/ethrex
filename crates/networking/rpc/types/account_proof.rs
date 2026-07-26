@@ -43,7 +43,8 @@ where
 }
 
 /// Version tag of the experimental EIP-8297 `eth_getProof` response
-/// shape served under `enableBinaryTreeAtGenesis`. Consumers MUST
+/// shape served while the binary-tree commitment is active
+/// (`binaryTreeTime` at or before the block timestamp). Consumers MUST
 /// reject unknown strings; EIP-8297's eventual canonical witness
 /// format supersedes this via a new tag. Spec:
 /// `docs/eip-draft-pbt-eth-getproof.md`.

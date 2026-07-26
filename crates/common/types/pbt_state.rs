@@ -1,7 +1,7 @@
 //! Flat state model for the experimental EIP-8297 binary-tree
 //! commitment. Maintained whenever the commitment is scheduled
-//! (`ChainConfig::binary_tree_scheduled`, i.e. the genesis flag or a
-//! `binary_tree_time`): shadow tracking runs from genesis so the first
+//! (`ChainConfig::binary_tree_scheduled`, i.e. a `binary_tree_time` —
+//! at/before genesis or mid-chain): shadow tracking runs from genesis so the first
 //! active block commits the full carried-over state.
 //!
 //! The MPT is keyed by keccak(address) with no preimage table, so the

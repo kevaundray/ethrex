@@ -160,9 +160,10 @@ experimental/devnet scale the flag is scoped to; incremental maintenance
    claim the proof supports.
 3. **`verify_proof` takes `Option<[u8;32]>`** — `Some(v)` demands inclusion
    with value `v`, `None` demands exclusion; mismatches are distinct errors.
-4. **Flag-gated response shape swap** — under `enableBinaryTreeAtGenesis`
-   the same `eth_getProof` method returns the new shape (tagged with
-   `format`); flag-off behavior is byte-identical to before.
+4. **Activation-gated response shape swap** — while the binary-tree
+   commitment is active (`binaryTreeTime`) the same `eth_getProof` method
+   returns the new shape (tagged with `format`); inactive behavior is
+   byte-identical to before.
 5. **Zero storage values verify as exclusions** — the state invariant stores
    no zero-valued slots, so `value == 0` in a storage proof entry means
    "prove absent", mirroring how the MPT path treats missing slots.

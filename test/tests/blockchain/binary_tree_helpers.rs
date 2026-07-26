@@ -58,8 +58,9 @@ pub(crate) fn test_recipient() -> Address {
 /// plus any `extra_accounts`, and return the genesis.
 ///
 /// `fixtures/genesis/l1-binarytree.json` is `l1-bal.json` plus
-/// `enableBinaryTreeAtGenesis`, so the same chain id / fork schedule /
-/// timestamps apply to both and blocks built on each are comparable.
+/// `binaryTreeTime: 0` (activation at genesis), so the same chain id /
+/// fork schedule / timestamps apply to both and blocks built on each are
+/// comparable.
 pub(crate) fn load_genesis_fixture(
     fixture: &str,
     sender: Address,

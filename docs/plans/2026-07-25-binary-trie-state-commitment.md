@@ -592,6 +592,14 @@ Recorded at the end of Task 8 (branch `kw/bin-trie-integration`). The plan
 above is history; this section records what actually shipped, where it
 diverged, and the known limitations.
 
+**Update (2026-07-26): `enableBinaryTreeAtGenesis` removed.** The boolean
+was consolidated away; `binaryTreeTime` is the single activation field, and
+genesis activation is spelled as a time at or before the genesis timestamp
+(canonically `binaryTreeTime: 0` — `fixtures/genesis/l1-binarytree.json`
+now says exactly that). The CLI sugar `--experimental.binary-tree` sets
+`binaryTreeTime = genesis.timestamp`. Mentions of the flag below are
+historical.
+
 **Shipped.** Genesis seeding, block import (single, batch-via-fallback, and
 pipeline paths) and payload building all commit and validate binary-trie
 (PBT) roots under `enable_binary_tree_at_genesis`; the MPT remains the

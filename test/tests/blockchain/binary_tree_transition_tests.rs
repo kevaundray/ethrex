@@ -19,7 +19,11 @@ use ethrex_common::{
     types::{Block, Genesis, GenesisAccount},
 };
 use ethrex_l2_rpc::signer::{LocalSigner, Signer};
-use ethrex_storage::{EngineType, Store};
+use ethrex_storage::Store;
+// Only the rocksdb-gated restart test opens a store by engine type; the
+// in-memory stores come from the shared helpers.
+#[cfg(feature = "rocksdb")]
+use ethrex_storage::EngineType;
 
 use super::binary_tree_helpers::{
     assert_binary_snapshots, build_and_import_transfers, load_genesis_fixture, sender_from_key,
@@ -43,9 +47,9 @@ fn untouched_account() -> Address {
 }
 const UNTOUCHED_BALANCE: u64 = 0xDEAD_BEEF;
 
-/// `l1-bal.json` (bool OFF, no schedule) with the untouched carry-over
-/// witness account injected into the alloc — the unscheduled base every
-/// scheduled variant below derives from, so twin chains share the alloc.
+/// `l1-bal.json` (no `binaryTreeTime` schedule) with the untouched
+/// carry-over witness account injected into the alloc — the unscheduled base
+/// every scheduled variant below derives from, so twin chains share the alloc.
 fn unscheduled_genesis(sender: Address) -> Genesis {
     let genesis = load_genesis_fixture(
         "l1-bal.json",
@@ -61,8 +65,8 @@ fn unscheduled_genesis(sender: Address) -> Genesis {
         )],
     );
     assert!(
-        !genesis.config.enable_binary_tree_at_genesis,
-        "fixture must not carry the genesis-activation flag (bool+time is rejected)"
+        genesis.config.binary_tree_time.is_none(),
+        "fixture must not schedule the binary tree — the scheduled variants derive from this unscheduled base"
     );
     genesis
 }
@@ -395,9 +399,9 @@ async fn restart_across_boundary_preserves_preflip_reads_and_recovers_by_replay(
         .expect("boot on existing datadir");
     let blockchain = Blockchain::default_with_store(store.clone());
 
-    // The genesis registry entries are re-seeded by the reopen — now under
-    // the `scheduled` predicate, not the genesis flag — while the per-block
-    // entries stayed in memory and are gone.
+    // The genesis registry entries are re-seeded by the reopen (the
+    // `scheduled` predicate) while the per-block entries stayed in memory
+    // and are gone.
     assert_eq!(
         store
             .get_pbt_state(genesis_hash)
@@ -743,25 +747,4 @@ async fn scheduled_but_never_active_is_observably_unscheduled() {
             "getProof must be identical across the twin chains at block {number}"
         );
     }
-}
-
-/// The two activation mechanisms are mutually exclusive: a genesis carrying
-/// BOTH `enableBinaryTreeAtGenesis` and `binaryTreeTime` is rejected at
-/// genesis load with an error naming both fields.
-#[tokio::test]
-async fn bool_and_time_conflict_rejected_at_genesis_load() {
-    let sender = sender_from_key(&test_secret_key());
-    let mut genesis = scheduled_genesis(sender);
-    genesis.config.enable_binary_tree_at_genesis = true;
-
-    let mut store = Store::new("store.db", EngineType::InMemory).expect("in-memory store");
-    let err = store
-        .add_initial_state(genesis)
-        .await
-        .expect_err("bool+time genesis must be rejected at genesis load");
-    let message = format!("{err}");
-    assert!(
-        message.contains("enableBinaryTreeAtGenesis") && message.contains("binaryTreeTime"),
-        "the conflict error must name both fields, got: {message}"
-    );
 }

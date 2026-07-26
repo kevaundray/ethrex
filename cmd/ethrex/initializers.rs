@@ -718,6 +718,59 @@ async fn set_sync_block(store: &Store) {
     }
 }
 
+/// Applies the experimental EIP-8297 CLI activation sugar to the loaded
+/// genesis, before the genesis hash/state root are computed so every node
+/// given the same genesis file and flags derives the identical config.
+///
+/// `--experimental.binary-tree` is sugar for activation-at-genesis: it sets
+/// `binaryTreeTime = genesis.timestamp`, equivalent to writing
+/// `binaryTreeTime: <genesis timestamp>` (or any earlier time, e.g. 0) in
+/// the genesis JSON — the genesis state root, and therefore the genesis
+/// hash, becomes the binary-tree root, so `add_initial_state`'s
+/// genesis-hash comparison enforces the same choice on reopen.
+/// `--experimental.binary-tree-delay N` schedules the flip at
+/// `genesis.timestamp + N` (genesis hash unchanged; the time joins the
+/// fork id).
+///
+/// clap's `conflicts_with` guards the two CLI flags against each other;
+/// a genesis JSON that already sets `binaryTreeTime` combined with either
+/// flag is a hard error HERE — both flags write that single field, and
+/// silently overwriting the file's schedule would fork the node off any
+/// peer that honors the file.
+fn apply_binary_tree_overrides(genesis: &mut Genesis, opts: &Options) -> eyre::Result<()> {
+    let flag = if opts.experimental_binary_tree {
+        "--experimental.binary-tree"
+    } else if opts.experimental_binary_tree_delay.is_some() {
+        "--experimental.binary-tree-delay"
+    } else {
+        return Ok(());
+    };
+
+    if let Some(time) = genesis.config.binary_tree_time {
+        return Err(eyre::eyre!(
+            "{flag} conflicts with the loaded genesis, which already sets \
+             `binaryTreeTime: {time}`: refusing to silently overwrite the file's \
+             schedule; drop the CLI flag or remove the genesis field"
+        ));
+    }
+
+    let binary_tree_time = if let Some(delay) = opts.experimental_binary_tree_delay {
+        let time = genesis.timestamp.saturating_add(delay);
+        warn!(
+            "EXPERIMENTAL: scheduling the EIP-8297 binary-trie commitment flip at \
+             timestamp {time} (genesis timestamp + {delay}s, {flag})"
+        );
+        time
+    } else {
+        warn!(
+            "EXPERIMENTAL: committing state through the EIP-8297 binary trie from genesis ({flag})"
+        );
+        genesis.timestamp
+    };
+    genesis.config.binary_tree_time = Some(binary_tree_time);
+    Ok(())
+}
+
 pub async fn init_l1(
     opts: Options,
     log_filter_handler: Option<reload::Handle<EnvFilter, Registry>>,
@@ -734,35 +787,7 @@ pub async fn init_l1(
     }
 
     let mut genesis = network.get_genesis()?;
-    if opts.experimental_binary_tree {
-        // Same effect as `enableBinaryTreeAtGenesis: true` in the genesis
-        // JSON, applied before the genesis hash/state root are computed so
-        // every flagged node derives the identical flagged genesis. The flag
-        // must match the stored chain config on reopen; `add_initial_state`'s
-        // genesis-hash comparison enforces that (a mismatch is rejected as an
-        // incompatible genesis, since the state root differs).
-        warn!(
-            "EXPERIMENTAL: committing state through the EIP-8297 binary trie \
-             (--experimental.binary-tree)"
-        );
-        genesis.config.enable_binary_tree_at_genesis = true;
-    }
-    if let Some(delay) = opts.experimental_binary_tree_delay {
-        // Same effect as `binaryTreeTime` in the genesis JSON, applied before
-        // the genesis hash is computed so every node given the same genesis
-        // file and delay derives the identical schedule. clap's
-        // `conflicts_with` only guards the two CLI flags against each other; a
-        // genesis JSON that already sets `enableBinaryTreeAtGenesis` combined
-        // with this flag is rejected by `add_initial_state`'s bool+time
-        // conflict guard.
-        let binary_tree_time = genesis.timestamp.saturating_add(delay);
-        warn!(
-            "EXPERIMENTAL: scheduling the EIP-8297 binary-trie commitment flip at \
-             timestamp {binary_tree_time} (genesis timestamp + {delay}s, \
-             --experimental.binary-tree-delay)"
-        );
-        genesis.config.binary_tree_time = Some(binary_tree_time);
-    }
+    apply_binary_tree_overrides(&mut genesis, &opts)?;
     display_chain_initialization(&genesis);
     debug!("Preloading KZG trusted setup");
     ethrex_crypto::kzg::warm_up_trusted_setup();
@@ -1096,7 +1121,9 @@ pub async fn regenerate_head_state(
 
 #[cfg(test)]
 mod tests {
-    use super::{resolve_p2p_endpoints, validate_rpc_addrs};
+    use super::{apply_binary_tree_overrides, resolve_p2p_endpoints, validate_rpc_addrs};
+    use crate::cli::Options;
+    use ethrex_common::types::Genesis;
     use std::net::{IpAddr, SocketAddr};
 
     fn ip(s: &str) -> IpAddr {
@@ -1105,6 +1132,62 @@ mod tests {
 
     fn addr(s: &str) -> SocketAddr {
         s.parse().unwrap()
+    }
+
+    /// The experimental binary-tree CLI flags are sugar that writes the one
+    /// activation field, `binaryTreeTime`; on a genesis whose JSON already
+    /// sets it, either flag must be a hard error (explicit beats a silent
+    /// overwrite that would fork the node off peers honoring the file).
+    /// Control arms: on a clean genesis the sugar applies —
+    /// `--experimental.binary-tree` ⇒ `binaryTreeTime = genesis.timestamp`
+    /// (activation at genesis), `--experimental.binary-tree-delay N` ⇒
+    /// `genesis.timestamp + N`.
+    #[test]
+    fn binary_tree_cli_flags_reject_genesis_with_json_binary_tree_time() {
+        let mut genesis = Genesis {
+            timestamp: 1_700_000_000,
+            ..Default::default()
+        };
+        let genesis_flag = Options {
+            experimental_binary_tree: true,
+            ..Default::default()
+        };
+        let delay_flag = Options {
+            experimental_binary_tree_delay: Some(30),
+            ..Default::default()
+        };
+
+        // Control: clean genesis, sugar applies.
+        apply_binary_tree_overrides(&mut genesis, &genesis_flag)
+            .expect("flag on a clean genesis must apply");
+        assert_eq!(genesis.config.binary_tree_time, Some(genesis.timestamp));
+
+        // JSON time already present: both flags are hard errors, naming the
+        // field and its value.
+        for opts in [&genesis_flag, &delay_flag] {
+            let err = apply_binary_tree_overrides(&mut genesis, opts)
+                .expect_err("a genesis JSON binaryTreeTime + a CLI flag must be rejected")
+                .to_string();
+            assert!(err.contains("binaryTreeTime: 1700000000"), "{err}");
+            assert!(err.contains("--experimental.binary-tree"), "{err}");
+        }
+        // The rejected calls must not have mutated the schedule.
+        assert_eq!(genesis.config.binary_tree_time, Some(genesis.timestamp));
+
+        // Control: the delay flag schedules relative to genesis.
+        genesis.config.binary_tree_time = None;
+        apply_binary_tree_overrides(&mut genesis, &delay_flag)
+            .expect("delay on a clean genesis must apply");
+        assert_eq!(
+            genesis.config.binary_tree_time,
+            Some(genesis.timestamp + 30)
+        );
+
+        // No flags: untouched either way.
+        let mut unflagged = Genesis::default();
+        apply_binary_tree_overrides(&mut unflagged, &Options::default())
+            .expect("no flags is a no-op");
+        assert_eq!(unflagged.config.binary_tree_time, None);
     }
 
     /// The default layout (distinct ports) must validate.

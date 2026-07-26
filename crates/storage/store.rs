@@ -1655,7 +1655,7 @@ impl Store {
     /// share the single persist worker).
     fn batch_state_roots(&self, update_batch: &UpdateBatch) -> Result<(H256, H256), StoreError> {
         // Both roots address MPT trie layers, so under the experimental
-        // binary-tree flag they must be resolved through the lookup registry
+        // binary-tree commitment they must be resolved through the lookup registry
         // (the headers commit to binary-tree roots there). The last block's
         // registry entry is recorded by `Blockchain::store_block` before the
         // update batch is handed over.
@@ -2761,15 +2761,6 @@ impl Store {
     ) -> Result<(), StoreError> {
         debug!("Storing initial state from genesis");
 
-        // Experimental EIP-8297: the two activation mechanisms are mutually
-        // exclusive; reject the ambiguous combination before anything is
-        // derived from the config. This is the earliest choke point every
-        // boot path (CLI, tests, L2) funnels through.
-        genesis
-            .config
-            .validate_binary_tree_schedule()
-            .map_err(StoreError::Custom)?;
-
         // Obtain genesis block
         let genesis_block = genesis.get_block();
         let genesis_block_number = genesis_block.header.number;
@@ -2803,7 +2794,7 @@ impl Store {
                 // Experimental EIP-8297: no registry re-seeding here — the
                 // genesis file's alloc is not trusted to describe the stored
                 // state (it is typically empty in this flow), so nothing can
-                // be derived. A flagged skip-validation datadir needs offline
+                // be derived. A binary-scheduled skip-validation datadir needs offline
                 // seeding via `put_pbt_state` / `put_mpt_lookup_root`.
                 return Ok(());
             }
@@ -2922,7 +2913,7 @@ impl Store {
     ) -> Result<Option<U256>, StoreError> {
         match self.get_block_header(block_number)? {
             // Resolves to `header.state_root` unless the experimental
-            // binary-tree flag redirects the MPT lookup through the side
+            // binary-tree commitment redirects the MPT lookup through the side
             // registry (the header then commits to the binary-tree root,
             // which addresses no MPT).
             Some(header) => self.get_storage_at_root(
@@ -3133,7 +3124,7 @@ impl Store {
             return Ok(None);
         };
         // The safe-commit cell is compared against MPT layer roots, so under
-        // the experimental binary-tree flag the target's root must resolve
+        // the experimental binary-tree commitment the target's root must resolve
         // through the side registry — the raw header root is a PBT root that
         // matches no layer, which would leave the backlog unflushed forever.
         Ok(Some(self.mpt_state_root_for_header(&header)?))
@@ -3145,7 +3136,7 @@ impl Store {
             return Ok(None);
         };
         // Resolves to `header.state_root` unless the experimental binary-tree
-        // flag redirects the MPT lookup through the side registry.
+        // commitment redirects the MPT lookup through the side registry.
         Ok(Some(self.open_state_trie(
             self.mpt_state_root_for_header(&header)?,
         )?))
@@ -3161,7 +3152,7 @@ impl Store {
             return Ok(None);
         };
         // Resolves to `header.state_root` unless the experimental binary-tree
-        // flag redirects the MPT lookup through the side registry. The same
+        // commitment redirects the MPT lookup through the side registry. The same
         // resolved root must anchor BOTH trie opens below: the layer cache is
         // keyed by MPT roots, so a raw (PBT) header root would silently miss
         // every uncommitted layer.
@@ -4912,31 +4903,33 @@ mod pbt_genesis_tests {
         alloc
     }
 
-    fn flagged_genesis() -> Genesis {
+    /// Genesis with the EIP-8297 commitment active from genesis
+    /// (`binaryTreeTime: 0`, at/before the default genesis timestamp).
+    fn binary_at_genesis() -> Genesis {
         let mut genesis = Genesis {
             alloc: small_alloc(),
             ..Default::default()
         };
-        genesis.config.enable_binary_tree_at_genesis = true;
+        genesis.config.binary_tree_time = Some(0);
         genesis
     }
 
     #[tokio::test]
-    async fn add_initial_state_seeds_genesis_pbt_snapshot_when_flagged() {
+    async fn add_initial_state_seeds_genesis_pbt_snapshot_when_active_at_genesis() {
         let mut store = Store::new("test-pbt", EngineType::InMemory).expect("in-memory store");
-        let genesis = flagged_genesis();
+        let genesis = binary_at_genesis();
         let genesis_block = genesis.get_block();
         let genesis_hash = genesis_block.hash();
 
         store
             .add_initial_state(genesis)
             .await
-            .expect("flagged genesis must initialize");
+            .expect("genesis-activated genesis must initialize");
 
         let state = store
             .get_pbt_state(genesis_hash)
             .expect("registry lookup")
-            .expect("flagged genesis must seed a binary-tree snapshot");
+            .expect("genesis-activated genesis must seed a binary-tree snapshot");
         assert_eq!(
             state.compute_root().expect("snapshot root"),
             genesis_block.header.state_root,
@@ -4945,7 +4938,7 @@ mod pbt_genesis_tests {
     }
 
     #[tokio::test]
-    async fn add_initial_state_without_flag_seeds_no_pbt_snapshot() {
+    async fn add_initial_state_unscheduled_seeds_no_pbt_snapshot() {
         let mut store = Store::new("test-pbt-off", EngineType::InMemory).expect("in-memory store");
         let genesis = Genesis {
             alloc: small_alloc(),
@@ -4956,14 +4949,14 @@ mod pbt_genesis_tests {
         store
             .add_initial_state(genesis)
             .await
-            .expect("unflagged genesis must initialize");
+            .expect("unscheduled genesis must initialize");
 
         assert!(
             store
                 .get_pbt_state(genesis_hash)
                 .expect("registry lookup")
                 .is_none(),
-            "no snapshot may be seeded when the flag is off"
+            "no snapshot may be seeded on an unscheduled chain"
         );
     }
 
@@ -4974,8 +4967,9 @@ mod pbt_genesis_tests {
         let genesis: Genesis = serde_json::from_reader(std::io::BufReader::new(file))
             .expect("fixture must deserialize");
         assert!(
-            genesis.config.enable_binary_tree_at_genesis,
-            "fixture must set enableBinaryTreeAtGenesis"
+            genesis.config.is_binary_tree_active(genesis.timestamp),
+            "fixture must activate the binary tree at genesis \
+             (binaryTreeTime at or before the genesis timestamp)"
         );
         let genesis_block = genesis.get_block();
         let genesis_hash = genesis_block.hash();

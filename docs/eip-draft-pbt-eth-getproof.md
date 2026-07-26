@@ -26,7 +26,8 @@ replaces the MPT-specific `accountProof`/`storageHash` fields, which have no
 meaning in a unified single-tree commitment.
 
 **This is an interim, experimental format**, scoped to chains activating
-the tree at genesis (ethrex's `enableBinaryTreeAtGenesis` flag). It is
+the tree at genesis (ethrex: `binaryTreeTime` at or before the genesis
+timestamp, canonically `binaryTreeTime: 0`). It is
 version-tagged (`format` field) so that the canonical witness/proof format
 EIP-8297 eventually standardizes can supersede it without ambiguity.
 
@@ -58,7 +59,8 @@ to be interpreted as described in RFC 2119.
 
 A node MUST serve this response format from `eth_getProof` if and only if
 the chain commits `header.state_root` to the PBT (for ethrex: the
-`enableBinaryTreeAtGenesis` chain-config flag). Request parameters are
+`binaryTreeTime` chain-config field, active at the block's timestamp).
+Request parameters are
 unchanged: `(address, storageKeys, block)`.
 
 ### Node preimages
@@ -260,7 +262,7 @@ implementation):
 4. **Wrong root rejection**: a valid proof fails against any other root.
 5. **Claim mismatches**: inclusion proofs fail `absent` claims and
    wrong-value claims; exclusion proofs fail `present` claims.
-6. **End-to-end**: on an `enableBinaryTreeAtGenesis` chain, `eth_getProof`
+6. **End-to-end**: on a genesis-activated (`binaryTreeTime: 0`) chain, `eth_getProof`
    for a live account, a set storage slot, and an unset slot returns proofs
    that verify against the block header's `state_root`.
 

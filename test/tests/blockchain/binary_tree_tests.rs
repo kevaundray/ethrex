@@ -1,9 +1,9 @@
 //! End-to-end tests for the experimental EIP-8297 binary-tree state
-//! commitment in its genesis-activated (degenerate) form:
-//! `ChainConfig::enable_binary_tree_at_genesis`, i.e. active from block 0
-//! (`is_binary_tree_active` holds for every timestamp). The scheduled
-//! mid-chain flip (`binary_tree_time`) is covered by
-//! `binary_tree_transition_tests.rs`.
+//! commitment in its genesis-activated (degenerate) form: a
+//! `binary_tree_time` at or before the genesis timestamp (the fixture
+//! spells it `binaryTreeTime: 0`), i.e. active from block 0
+//! (`is_binary_tree_active` holds for every block). The scheduled
+//! mid-chain flip is covered by `binary_tree_transition_tests.rs`.
 //!
 //! When active, payload building must put the binary-trie (PBT) root in
 //! `header.state_root`, and block import must validate that root against a
@@ -60,8 +60,8 @@ async fn binary_tree_chain_of_three_commits_binary_roots() {
     assert_binary_snapshots(&store, &blocks);
 
     // Cheapest honest "this is not an MPT root" assertion: run the identical
-    // block-1 build on the same fixture without the flag (l1-bal.json differs
-    // from l1-binarytree.json only by `enableBinaryTreeAtGenesis`; same chain
+    // block-1 build on the same fixture without the schedule (l1-bal.json
+    // differs from l1-binarytree.json only by `binaryTreeTime: 0`; same chain
     // id, forks, timestamps and alloc, and the injected sender + tx are
     // identical), and require the committed roots to differ.
     let sk = test_secret_key();

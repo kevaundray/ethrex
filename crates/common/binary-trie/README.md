@@ -41,10 +41,12 @@ fixture's `source_commit` field and regeneration is deterministic.
 ### State-commitment integration
 
 An experimental state-commitment integration EXISTS behind the
-`enableBinaryTreeAtGenesis` genesis config flag: `PbtState` in
+`binaryTreeTime` genesis config field (a timestamp at or before the
+genesis timestamp — canonically `binaryTreeTime: 0` — activates from
+genesis; a later one schedules a mid-chain flip): `PbtState` in
 `ethrex-common` (`crates/common/types/pbt_state.rs`) shadow-tracks the
-flat state, re-embeds it through this crate per block, and under the
-flag `header.state_root` commits to the binary-trie root while the MPT
+flat state, re-embeds it through this crate per block, and once active
+`header.state_root` commits to the binary-trie root while the MPT
 stays the lookup structure. See
 `docs/plans/2026-07-25-binary-trie-state-commitment.md` (including its
 "Implementation notes (as-built)" section) for scope and limitations.
@@ -54,7 +56,7 @@ stays the lookup structure. See
 Per-key proofs EXIST: `BinaryTrie::prove` returns the ordered node
 preimages along a key's walk (inclusion and exclusion from the same
 walk) and `trie::proof::verify_proof` checks them statelessly against
-a root. `eth_getProof` serves them under the flag in the experimental
+a root. `eth_getProof` serves them while active in the experimental
 `pbt-getproof-v1` response shape — see
 `docs/eip-draft-pbt-eth-getproof.md` (format spec, explicitly interim
 until EIP-8297 standardizes a witness format) and

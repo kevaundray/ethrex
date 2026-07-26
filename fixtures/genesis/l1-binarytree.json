@@ -43,7 +43,7 @@
     },
     "mergeNetsplitBlock": 0,
     "amsterdamTime": 0,
-    "enableBinaryTreeAtGenesis": true
+    "binaryTreeTime": 0
   },
   "nonce": "0x1234",
   "timestamp": "1718040081",

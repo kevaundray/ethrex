@@ -1,10 +1,11 @@
 # EIP-8297 binary-tree (PBT) experimental devnet.
 #
-# Every EL is ethrex with --experimental.binary-tree, which forces
-# `enableBinaryTreeAtGenesis` on the generated genesis: all nodes derive the
-# identical PBT-committed genesis and every block header carries a
-# Partitioned-Binary-Tree state root instead of an MPT root. Non-ethrex ELs
-# cannot join this network — they would reject the PBT roots.
+# Every EL is ethrex with --experimental.binary-tree, which sets
+# `binaryTreeTime` to the genesis timestamp on the generated genesis
+# (activation at genesis): all nodes derive the identical PBT-committed
+# genesis and every block header carries a Partitioned-Binary-Tree state
+# root instead of an MPT root. Non-ethrex ELs cannot join this network —
+# they would reject the PBT roots.
 #
 # Run: make localnet KURTOSIS_CONFIG_FILE=./fixtures/networks/binary-tree-devnet.yaml
 #
