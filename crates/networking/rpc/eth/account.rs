@@ -230,11 +230,16 @@ impl RpcHandler for GetProofRequest {
         let Some(header) = storage.get_block_header(block_number)? else {
             return Ok(Value::Null);
         };
-        // Experimental EIP-8297: under the flag the header commits to the
-        // binary tree, which the MPT proof below cannot prove against, so
-        // the response switches to the pbt-getproof-v1 shape. Flag off,
-        // everything past this point is untouched.
-        if storage.get_chain_config().enable_binary_tree_at_genesis {
+        // Experimental EIP-8297, per-block: when the commitment is active at
+        // the TARGET block's timestamp its header commits to the binary
+        // tree, which the MPT proof below cannot prove against, so the
+        // response switches to the pbt-getproof-v1 shape. Pre-activation
+        // (and unscheduled) blocks take the untouched MPT path — their
+        // headers carry the MPT root directly.
+        if storage
+            .get_chain_config()
+            .is_binary_tree_active(header.timestamp)
+        {
             return self.handle_binary_tree(&context, &header);
         }
         // Create account proof

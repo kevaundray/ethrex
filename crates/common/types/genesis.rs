@@ -299,7 +299,9 @@ pub struct ChainConfig {
 
     /// Experimental EIP-8297 state commitment: when set, genesis and block
     /// state roots are Partitioned-Binary-Tree roots instead of MPT roots.
-    /// Activation is genesis-only (transition machinery is a later phase).
+    /// Activation is genesis-only (the degenerate case of the scheduled
+    /// transition — see `binary_tree_time`, mutually exclusive with this
+    /// flag: setting both is rejected at genesis load).
     /// Does not participate in fork identity: nodes disagreeing on this flag
     /// already diverge at the genesis hash, since the genesis state root
     /// differs.
@@ -312,7 +314,9 @@ pub struct ChainConfig {
     /// shadow-track the flat state from genesis so the flip commits the
     /// FULL state (consensus rule: carry-over, not empty-start). Not an
     /// EVM fork: deliberately NOT a `Fork` variant (commitment is
-    /// orthogonal to execution semantics; cf. `verkle_time`).
+    /// orthogonal to execution semantics; cf. `verkle_time`). Mutually
+    /// exclusive with `enable_binary_tree_at_genesis`: setting both is
+    /// rejected at genesis load.
     pub binary_tree_time: Option<u64>,
 }
 
@@ -476,6 +480,23 @@ impl ChainConfig {
             || self
                 .binary_tree_time
                 .is_some_and(|time| time <= block_timestamp)
+    }
+
+    /// Rejects the ambiguous combination of both EIP-8297 activation
+    /// mechanisms: `enable_binary_tree_at_genesis` means "active from
+    /// genesis", which a scheduled `binary_tree_time` contradicts (unless
+    /// equal to the genesis timestamp — kept simple: any combination is a
+    /// hard error). Enforced at genesis load (`Store::add_initial_state`).
+    pub fn validate_binary_tree_schedule(&self) -> Result<(), String> {
+        if self.enable_binary_tree_at_genesis && self.binary_tree_time.is_some() {
+            return Err(
+                "`enableBinaryTreeAtGenesis` and `binaryTreeTime` are mutually exclusive: \
+                 the flag means active-from-genesis, which a scheduled activation timestamp \
+                 contradicts; set exactly one"
+                    .to_string(),
+            );
+        }
+        Ok(())
     }
 
     pub fn display_config(&self) -> String {
@@ -857,11 +878,14 @@ impl Genesis {
     }
 
     pub fn compute_state_root(&self) -> H256 {
-        // Experimental EIP-8297: under the flag the genesis commits to the
-        // binary-tree root instead of the MPT root. Genesis construction has
-        // no error channel; the only failure is an alloc that violates the
-        // binary-tree constraints, which is a malformed-genesis bug.
-        if self.config.enable_binary_tree_at_genesis {
+        // Experimental EIP-8297: when the commitment is active AT the
+        // genesis timestamp (the genesis flag, or a binary_tree_time <= the
+        // genesis timestamp) the genesis commits to the binary-tree root
+        // instead of the MPT root; a later-scheduled genesis keeps the MPT
+        // root until the flip. Genesis construction has no error channel;
+        // the only failure is an alloc that violates the binary-tree
+        // constraints, which is a malformed-genesis bug.
+        if self.config.is_binary_tree_active(self.timestamp) {
             return crate::types::PbtState::from_genesis_alloc(&self.alloc)
                 .compute_root()
                 .expect("genesis alloc must satisfy binary-tree constraints (balances < 2^128)");
@@ -870,10 +894,11 @@ impl Genesis {
     }
 
     /// The MPT root of the genesis alloc, regardless of what the header
-    /// commits to. Identical to [`Genesis::compute_state_root`] with the
-    /// binary-tree flag off; under the flag the header carries the
-    /// binary-tree root instead, and this is the root under which the MPT
-    /// lookup structure is stored (the store's side-registry entry).
+    /// commits to. Identical to [`Genesis::compute_state_root`] unless the
+    /// binary-tree commitment is active at the genesis timestamp; when it
+    /// is, the header carries the binary-tree root instead, and this is the
+    /// root under which the MPT lookup structure is stored (the store's
+    /// side-registry entry).
     pub fn compute_mpt_state_root(&self) -> H256 {
         let iter = self.alloc.iter().map(|(addr, account)| {
             (
@@ -1080,6 +1105,87 @@ mod tests {
             pbt_root, mpt_root,
             "binary-tree root must differ from the MPT root for the same alloc"
         );
+    }
+
+    #[test]
+    fn compute_state_root_follows_activation_at_genesis_timestamp() {
+        use crate::types::PbtState;
+
+        let mut alloc: BTreeMap<Address, GenesisAccount> = BTreeMap::new();
+        alloc.insert(
+            Address::from_low_u64_be(0xaa),
+            GenesisAccount {
+                code: Bytes::new(),
+                storage: BTreeMap::new(),
+                balance: U256::from(1_000_000u64),
+                nonce: 1,
+            },
+        );
+        let mut genesis = Genesis {
+            alloc,
+            timestamp: 1000,
+            ..Default::default()
+        };
+        let mpt_root = genesis.compute_mpt_state_root();
+        let pbt_root = PbtState::from_genesis_alloc(&genesis.alloc)
+            .compute_root()
+            .expect("test balances fit the 2^128 cap");
+        assert_ne!(mpt_root, pbt_root);
+
+        // Scheduled AFTER genesis: the genesis header keeps the MPT root
+        // (shadow tracking runs, but nothing is committed yet).
+        genesis.config.binary_tree_time = Some(genesis.timestamp + 100);
+        assert_eq!(
+            genesis.compute_state_root(),
+            mpt_root,
+            "scheduled-later genesis must commit the MPT root"
+        );
+
+        // Active AT genesis (time <= timestamp): binary root.
+        genesis.config.binary_tree_time = Some(genesis.timestamp);
+        assert_eq!(
+            genesis.compute_state_root(),
+            pbt_root,
+            "genesis active at its own timestamp must commit the binary root"
+        );
+
+        // The bool is the degenerate active-from-genesis case.
+        genesis.config.binary_tree_time = None;
+        genesis.config.enable_binary_tree_at_genesis = true;
+        assert_eq!(genesis.compute_state_root(), pbt_root);
+    }
+
+    #[test]
+    fn binary_tree_bool_and_time_conflict_rejected() {
+        let conflicting = ChainConfig {
+            enable_binary_tree_at_genesis: true,
+            binary_tree_time: Some(1000),
+            ..Default::default()
+        };
+        let err = conflicting
+            .validate_binary_tree_schedule()
+            .expect_err("bool + time must be rejected as ambiguous");
+        assert!(
+            err.contains("enableBinaryTreeAtGenesis") && err.contains("binaryTreeTime"),
+            "error must name both fields, got: {err}"
+        );
+
+        // Each alone (and neither) is valid.
+        for config in [
+            ChainConfig::default(),
+            ChainConfig {
+                enable_binary_tree_at_genesis: true,
+                ..Default::default()
+            },
+            ChainConfig {
+                binary_tree_time: Some(1000),
+                ..Default::default()
+            },
+        ] {
+            config
+                .validate_binary_tree_schedule()
+                .expect("a single activation mechanism must validate");
+        }
     }
 
     #[test]

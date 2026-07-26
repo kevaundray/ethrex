@@ -217,18 +217,21 @@ pub struct Store {
     code_metadata_cache: Arc<Mutex<rustc_hash::FxHashMap<H256, CodeMetadata>>>,
 
     /// Experimental EIP-8297 binary-tree state snapshots, keyed by block
-    /// hash (`ChainConfig::enable_binary_tree_at_genesis`). In-memory only:
-    /// seeded at genesis for now; block-import maintenance lands separately.
-    /// Snapshots are never evicted in this phase.
+    /// hash. Maintained whenever the commitment is scheduled
+    /// (`ChainConfig::binary_tree_scheduled`): shadow tracking runs from
+    /// genesis so the first active block can commit the full carried-over
+    /// state. In-memory only; snapshots are never evicted in this phase.
     pbt_states: Arc<Mutex<rustc_hash::FxHashMap<BlockHash, Arc<PbtState>>>>,
 
     /// Experimental EIP-8297 companion to `pbt_states`: the MPT root under
-    /// which each block's state is persisted, keyed by block hash. Under the
-    /// flag, `header.state_root` commits to the binary-tree root while the
-    /// MPT remains the lookup structure — but MPT tries are addressed by
-    /// their root, which the header no longer carries, so it must be
-    /// recorded out of band (in-memory, same lifecycle as `pbt_states`).
-    /// Unused (empty) when the flag is off.
+    /// which each block's state is persisted, keyed by block hash. Once the
+    /// commitment is active (`ChainConfig::is_binary_tree_active` at the
+    /// header timestamp), `header.state_root` commits to the binary-tree
+    /// root while the MPT remains the lookup structure — but MPT tries are
+    /// addressed by their root, which the header no longer carries, so it
+    /// must be recorded out of band (in-memory, same lifecycle as
+    /// `pbt_states`). Populated whenever scheduled (pre-activation entries
+    /// equal the header root); unused (empty) on unscheduled chains.
     mpt_lookup_roots: Arc<Mutex<rustc_hash::FxHashMap<BlockHash, H256>>>,
 
     /// Serializes concurrent `forkchoice_update` callers so that the cache
@@ -2572,8 +2575,9 @@ impl Store {
     }
 
     /// Returns the experimental EIP-8297 binary-tree state snapshot for
-    /// `block_hash`, if one has been stored. Populated at genesis when
-    /// `ChainConfig::enable_binary_tree_at_genesis` is set.
+    /// `block_hash`, if one has been stored. Populated from genesis onward
+    /// whenever the commitment is scheduled
+    /// (`ChainConfig::binary_tree_scheduled`).
     pub fn get_pbt_state(
         &self,
         block_hash: BlockHash,
@@ -2603,36 +2607,44 @@ impl Store {
     }
 
     /// Experimental EIP-8297: derives the genesis `PbtState` snapshot from
-    /// the alloc, verifies it reproduces the genesis header's (binary-tree)
-    /// state root, and registers it. Shared by fresh-datadir init and the
+    /// the alloc and registers it. Shared by fresh-datadir init and the
     /// matching-genesis reopen path, which must re-seed the in-memory
-    /// registry entries a restart wiped.
+    /// registry entries a restart wiped. Runs whenever the commitment is
+    /// *scheduled* (shadow tracking starts at genesis).
     ///
-    /// The header root comes from this same `from_genesis_alloc` +
-    /// `compute_root` pipeline, so the mismatch check is a
-    /// funnel-consistency guard against the two paths diverging in future
-    /// edits, not independent verification.
+    /// `expected_header_root` carries the genesis header's state root when
+    /// the commitment is *active at the genesis timestamp* — only then does
+    /// the header commit the binary-tree root, so only then can the seeded
+    /// snapshot be checked against it. That root comes from this same
+    /// `from_genesis_alloc` + `compute_root` pipeline, so the mismatch check
+    /// is a funnel-consistency guard against the two paths diverging in
+    /// future edits, not independent verification. A scheduled-later genesis
+    /// passes `None`: its header commits the MPT root, which the snapshot's
+    /// binary root can never (and must never) match.
     fn seed_genesis_pbt_snapshot(
         &self,
         genesis: &Genesis,
         genesis_hash: BlockHash,
-        header_state_root: H256,
+        expected_header_root: Option<H256>,
     ) -> Result<(), StoreError> {
         let pbt_state = PbtState::from_genesis_alloc(&genesis.alloc);
-        let pbt_root = pbt_state.compute_root()?;
-        if pbt_root != header_state_root {
-            return Err(StoreError::Custom(format!(
-                "binary-tree genesis root mismatch: computed {pbt_root:#x} but the genesis header commits to {header_state_root:#x}"
-            )));
+        if let Some(header_state_root) = expected_header_root {
+            let pbt_root = pbt_state.compute_root()?;
+            if pbt_root != header_state_root {
+                return Err(StoreError::Custom(format!(
+                    "binary-tree genesis root mismatch: computed {pbt_root:#x} but the genesis header commits to {header_state_root:#x}"
+                )));
+            }
         }
         self.put_pbt_state(genesis_hash, pbt_state)
     }
 
     /// Records the MPT root under which `block_hash`'s state is persisted.
-    /// Only meaningful under `ChainConfig::enable_binary_tree_at_genesis`,
-    /// where the header's `state_root` commits to the binary-tree root and
-    /// can no longer address the MPT lookup structure. Written at genesis
-    /// seeding and on every block import.
+    /// Only meaningful when the EIP-8297 commitment is scheduled
+    /// (`ChainConfig::binary_tree_scheduled`); once active at a header's
+    /// timestamp, the header's `state_root` commits to the binary-tree root
+    /// and can no longer address the MPT lookup structure. Written at
+    /// genesis seeding and on every block import while scheduled.
     pub fn put_mpt_lookup_root(
         &self,
         block_hash: BlockHash,
@@ -2657,11 +2669,12 @@ impl Store {
     }
 
     /// Resolves the root under which `header`'s MPT state is stored: the
-    /// header's own `state_root` normally, or the side-registry entry under
-    /// the experimental EIP-8297 flag (where the header commits to the
-    /// binary-tree root instead). Errors under the flag when no entry was
-    /// recorded — the MPT for that block is unaddressable, which means the
-    /// block was never imported through this store instance.
+    /// header's own `state_root` normally, or the side-registry entry when
+    /// the experimental EIP-8297 commitment is active at the header's
+    /// timestamp (the header then commits to the binary-tree root instead).
+    /// Errors for an active header when no entry was recorded — the MPT for
+    /// that block is unaddressable, which means the block was never imported
+    /// through this store instance.
     pub fn mpt_state_root_for_header(&self, header: &BlockHeader) -> Result<H256, StoreError> {
         self.mpt_state_root_for_header_opt(header)?.ok_or_else(|| {
             let block_hash = header.hash();
@@ -2678,28 +2691,41 @@ impl Store {
     /// state is not reconstructible right now" (restart before replay, or a
     /// block we never imported) — probes must treat it exactly like an
     /// unknown state root, not as an error.
+    ///
+    /// The resolution rule is PER-HEADER, not per-chain: the registry is
+    /// consulted only when the binary-tree commitment is active at the
+    /// header's own timestamp; any earlier header (including every header of
+    /// an unscheduled chain, and all pre-flip headers of a scheduled one)
+    /// resolves to its own `state_root`, which IS the MPT root. This keeps
+    /// pre-flip blocks readable across restarts without replay — the
+    /// in-memory registries don't survive a restart, but pre-flip headers
+    /// never need them.
     pub fn mpt_state_root_for_header_opt(
         &self,
         header: &BlockHeader,
     ) -> Result<Option<H256>, StoreError> {
-        if !self.get_chain_config().enable_binary_tree_at_genesis {
+        if !self
+            .get_chain_config()
+            .is_binary_tree_active(header.timestamp)
+        {
             return Ok(Some(header.state_root));
         }
         // `header.hash()` may recompute keccak for headers freshly decoded
         // from the DB (the OnceLock cache only helps reused instances).
-        // Acceptable while the flag is experimental — the flag-off path above
-        // returns before hashing; revisit with a hash-taking variant when
-        // this hardens.
+        // Acceptable while the commitment is experimental — the inactive
+        // path above returns before hashing; revisit with a hash-taking
+        // variant when this hardens.
         self.get_mpt_lookup_root(header.hash())
     }
 
     /// Whether `header`'s post-state can be constructed from this store:
     /// resolves the header's MPT lookup root (the header's own `state_root`
-    /// normally, the side-registry entry under the experimental EIP-8297
-    /// flag) and checks the MPT layer for it is present. Under the flag a
-    /// missing registry entry answers `false` — same meaning as a missing
-    /// state root. Use this instead of `has_state_root(header.state_root)`
-    /// whenever the root being probed comes from a block header.
+    /// normally, the side-registry entry when the experimental EIP-8297
+    /// commitment is active at the header's timestamp) and checks the MPT
+    /// layer for it is present. For an active header a missing registry
+    /// entry answers `false` — same meaning as a missing state root. Use
+    /// this instead of `has_state_root(header.state_root)` whenever the
+    /// root being probed comes from a block header.
     pub fn has_reconstructible_state(&self, header: &BlockHeader) -> Result<bool, StoreError> {
         match self.mpt_state_root_for_header_opt(header)? {
             Some(state_root) => self.has_state_root(state_root),
@@ -2734,6 +2760,15 @@ impl Store {
         skip_genesis_validation: bool,
     ) -> Result<(), StoreError> {
         debug!("Storing initial state from genesis");
+
+        // Experimental EIP-8297: the two activation mechanisms are mutually
+        // exclusive; reject the ambiguous combination before anything is
+        // derived from the config. This is the earliest choke point every
+        // boot path (CLI, tests, L2) funnels through.
+        genesis
+            .config
+            .validate_binary_tree_schedule()
+            .map_err(StoreError::Custom)?;
 
         // Obtain genesis block
         let genesis_block = genesis.get_block();
@@ -2780,11 +2815,18 @@ impl Store {
                 // genesis still require replay — see the missing-entry error
                 // in `mpt_state_root_for_header`). Same derivations as the
                 // fresh-datadir path below.
-                if genesis.config.enable_binary_tree_at_genesis {
+                if genesis.config.binary_tree_scheduled() {
+                    // Funnel-consistency check only when the commitment is
+                    // active AT genesis: a scheduled-later genesis header
+                    // commits the MPT root, which the snapshot's binary root
+                    // must not be compared against.
                     self.seed_genesis_pbt_snapshot(
                         &genesis,
                         genesis_hash,
-                        genesis_block.header.state_root,
+                        genesis
+                            .config
+                            .is_binary_tree_active(genesis.timestamp)
+                            .then_some(genesis_block.header.state_root),
                     )?;
                     // Deterministic recomputation over verified input: this
                     // branch only runs when header.hash() == genesis_hash,
@@ -2793,7 +2835,9 @@ impl Store {
                     // test. No has_state_root guard: the genesis MPT layer is
                     // legitimately pruned past DB_COMMIT_THRESHOLD — the
                     // registry entry is an addressing record, not a liveness
-                    // claim.
+                    // claim. Recorded whenever scheduled: pre-activation it
+                    // equals the header root (harmless identity), keeping the
+                    // registry uniform across the flip.
                     self.put_mpt_lookup_root(genesis_hash, genesis.compute_mpt_state_root())?;
                 }
                 return Ok(());
@@ -2809,29 +2853,41 @@ impl Store {
                     .await?
             }
         }
-        // Experimental EIP-8297: seed the binary-tree snapshot for the
-        // genesis block. Built by borrowing the alloc before it moves into
-        // the MPT setup below; the MPT is still built as the lookup
-        // structure, but under the flag the header's state_root commits to
-        // the binary-tree root.
-        if genesis.config.enable_binary_tree_at_genesis {
+        // Experimental EIP-8297: when the commitment is scheduled (whether
+        // active at genesis or later), seed the binary-tree snapshot for the
+        // genesis block — shadow tracking starts here. Built by borrowing
+        // the alloc before it moves into the MPT setup below; the MPT is
+        // still built as the lookup structure. The snapshot-vs-header
+        // funnel check applies only when active AT genesis (a
+        // scheduled-later genesis header commits the MPT root).
+        if genesis.config.binary_tree_scheduled() {
             self.seed_genesis_pbt_snapshot(
                 &genesis,
                 genesis_hash,
-                genesis_block.header.state_root,
+                genesis
+                    .config
+                    .is_binary_tree_active(genesis.timestamp)
+                    .then_some(genesis_block.header.state_root),
             )?;
         }
 
         // Store genesis accounts
         // TODO: Should we use this root instead of computing it before the block hash check?
         let genesis_state_root = self.setup_genesis_state_trie(genesis.alloc).await?;
-        // Under the binary-tree flag the header commits to the binary-tree
-        // root (verified above), not the MPT root, so this only holds with
-        // the flag off — and the MPT root must be recorded out of band so
-        // the lookup structure stays addressable.
-        if genesis.config.enable_binary_tree_at_genesis {
+        // When the commitment is active at genesis the header commits to the
+        // binary-tree root (verified above), not the MPT root, so the
+        // MPT-root-equals-header assert only holds while inactive. The MPT
+        // root is recorded out of band whenever scheduled so the lookup
+        // structure stays addressable across the flip (pre-activation the
+        // entry equals the header root — a harmless identity that keeps the
+        // registry uniform).
+        if genesis.config.binary_tree_scheduled() {
             self.put_mpt_lookup_root(genesis_hash, genesis_state_root)?;
-        } else {
+        }
+        if !genesis
+            .config
+            .is_binary_tree_active(genesis_block.header.timestamp)
+        {
             debug_assert_eq!(genesis_state_root, genesis_block.header.state_root);
         }
 

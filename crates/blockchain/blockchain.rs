@@ -592,11 +592,12 @@ impl Blockchain {
         let chain_config = self.storage.get_chain_config();
 
         // Whether the merkleizer must accumulate the raw per-block
-        // `AccountUpdate`s. Needed for witness generation, and under the
-        // experimental EIP-8297 flag for `store_block`'s binary-trie
-        // commitment (which extends the parent snapshot with exactly these
-        // updates). Forces the streaming merkleizer below.
-        let collect_updates = collect_witness || chain_config.enable_binary_tree_at_genesis;
+        // `AccountUpdate`s. Needed for witness generation, and whenever the
+        // experimental EIP-8297 commitment is scheduled, for `store_block`'s
+        // shadow tracking (which extends the parent snapshot with exactly
+        // these updates on EVERY block, pre- and post-activation). Forces
+        // the streaming merkleizer below.
+        let collect_updates = collect_witness || chain_config.binary_tree_scheduled();
 
         // Validate the block pre-execution
         validate_block_pre_execution(block, parent_header, &chain_config, ELASTICITY_MULTIPLIER)?;
@@ -974,10 +975,10 @@ impl Blockchain {
             merkleization_result?;
         let (execution_result, produced_bal, exec_end_instant) = execution_result?;
 
-        // Update accumulation (witness collection or the binary-tree flag)
-        // forces the streaming merkleizer (synthesized updates are disabled
-        // above), so the streaming merkleizer is the only possible source of
-        // accumulated updates.
+        // Update accumulation (witness collection or a scheduled binary-tree
+        // commitment) forces the streaming merkleizer (synthesized updates
+        // are disabled above), so the streaming merkleizer is the only
+        // possible source of accumulated updates.
         let accumulated_updates = streaming_witness;
 
         let exec_merkle_end_instant = Instant::now();
@@ -2187,22 +2188,38 @@ impl Blockchain {
         account_updates_list: AccountUpdatesList,
         execution_result: BlockExecutionResult,
     ) -> Result<(), ChainError> {
-        if self
-            .storage
-            .get_chain_config()
-            .enable_binary_tree_at_genesis
-        {
-            // Experimental EIP-8297: the header commits to the binary-trie
-            // root. Extend the parent's snapshot with this block's raw
-            // account updates, validate the resulting root against the
-            // header (this REPLACES the MPT-root-vs-header check), and store
-            // the new snapshot under the block's hash. The MPT updates are
-            // still persisted below as the lookup structure, addressed via
-            // the side registry (`put_mpt_lookup_root`) since the header no
-            // longer carries the MPT root.
-            let (pbt_state, binary_root) =
-                self.extended_pbt_state(block.header.parent_hash, account_updates)?;
-            validate_state_root(&block.header, binary_root)?;
+        let chain_config = self.storage.get_chain_config();
+        let binary_tree_active = chain_config.is_binary_tree_active(block.header.timestamp);
+
+        // While the EIP-8297 commitment is not active at this block's
+        // timestamp (unscheduled chains and pre-activation blocks of a
+        // scheduled one), the header commits the MPT root — validate it
+        // FIRST, so a rejected block leaves no registry entries behind.
+        if !binary_tree_active {
+            validate_state_root(&block.header, account_updates_list.state_trie_hash)?;
+        }
+
+        if chain_config.binary_tree_scheduled() {
+            // Experimental EIP-8297 shadow tracking: extend the parent's
+            // snapshot with this block's raw account updates on EVERY block
+            // of a scheduled chain, so the first active block commits the
+            // full carried-over state. Once active, the header commits to
+            // the binary-trie root — validate it against the extension
+            // (this REPLACES the MPT-root-vs-header check above); before
+            // activation the extension is tracked without computing its
+            // root (O(state) per root — skipped until a header commits it).
+            // The MPT updates are still persisted below as the lookup
+            // structure, addressed via the side registry
+            // (`put_mpt_lookup_root`) once the header no longer carries the
+            // MPT root (pre-activation entries equal the header root).
+            let pbt_state = if binary_tree_active {
+                let (pbt_state, binary_root) =
+                    self.extended_pbt_state(block.header.parent_hash, account_updates)?;
+                validate_state_root(&block.header, binary_root)?;
+                pbt_state
+            } else {
+                self.extend_pbt_state(block.header.parent_hash, account_updates)?
+            };
             // Both registry writes deliberately precede `store_block_updates`:
             // the apply path resolves the previous block's MPT root through
             // the registry, so the entries must be visible before the batch is
@@ -2211,9 +2228,6 @@ impl Blockchain {
             self.storage.put_pbt_state(block.hash(), pbt_state)?;
             self.storage
                 .put_mpt_lookup_root(block.hash(), account_updates_list.state_trie_hash)?;
-        } else {
-            // Check state root matches the one in block header
-            validate_state_root(&block.header, account_updates_list.state_trie_hash)?;
         }
 
         let update_batch = UpdateBatch {
@@ -2251,19 +2265,33 @@ impl Blockchain {
     }
 
     /// Extends `parent_hash`'s binary-tree snapshot with `account_updates`
+    /// WITHOUT computing its root: shadow tracking for pre-activation blocks
+    /// of a scheduled chain, whose headers commit MPT roots — the binary
+    /// root is O(state) to compute and nothing consumes it until the flip.
+    pub(crate) fn extend_pbt_state(
+        &self,
+        parent_hash: BlockHash,
+        account_updates: &[AccountUpdate],
+    ) -> Result<PbtState, ChainError> {
+        let parent = self.require_pbt_state(parent_hash)?;
+        let mut pbt_state = (*parent).clone();
+        pbt_state.apply_account_updates(account_updates);
+        Ok(pbt_state)
+    }
+
+    /// Extends `parent_hash`'s binary-tree snapshot with `account_updates`
     /// and returns the new state together with its binary-trie root. Shared
     /// by block import (`store_block`, which validates the root against the
     /// header and is the only writer of the snapshot) and payload building
     /// (`finalize_payload`, which commits only the root into the built
-    /// header).
+    /// header); both call it only when the commitment is active at the
+    /// block's timestamp.
     pub(crate) fn extended_pbt_state(
         &self,
         parent_hash: BlockHash,
         account_updates: &[AccountUpdate],
     ) -> Result<(PbtState, H256), ChainError> {
-        let parent = self.require_pbt_state(parent_hash)?;
-        let mut pbt_state = (*parent).clone();
-        pbt_state.apply_account_updates(account_updates);
+        let pbt_state = self.extend_pbt_state(parent_hash, account_updates)?;
         let binary_root = pbt_state.compute_root().map_err(StoreError::from)?;
         Ok((pbt_state, binary_root))
     }
@@ -2460,9 +2488,10 @@ impl Blockchain {
         }
 
         // `accumulated_updates` is only populated when the merkleizer was told
-        // to accumulate (witness collection or the binary-tree flag); with the
-        // flag on it is always Some, and with the flag off `store_block`
-        // ignores the slice, so the empty fallback is never observed.
+        // to accumulate (witness collection or a scheduled binary-tree
+        // commitment); when scheduled it is always Some, and when unscheduled
+        // `store_block` ignores the slice, so the empty fallback is never
+        // observed.
         let result = self.store_block(
             block,
             accumulated_updates.as_deref().unwrap_or(&[]),
@@ -2804,11 +2833,13 @@ impl Blockchain {
 
         // Experimental EIP-8297: the batch path executes the whole range and
         // merkleizes ONCE, validating only the last header — it cannot
-        // produce the per-block `PbtState` snapshots (and per-block header
-        // checks) the binary-tree commitment requires. Fall back to the
-        // single-block path per block; the flag is experimental, so the
-        // batch throughput loss is acceptable.
-        if chain_config.enable_binary_tree_at_genesis {
+        // produce the per-block `PbtState` snapshot chain that shadow
+        // tracking requires on EVERY block of a scheduled chain (falling
+        // back only-when-active would silently skip pre-activation
+        // snapshots and break the carry-over). Fall back to the
+        // single-block path per block; the commitment is experimental, so
+        // the batch throughput loss is acceptable.
+        if chain_config.binary_tree_scheduled() {
             for (i, block) in blocks.into_iter().enumerate() {
                 if cancellation_token.is_cancelled() {
                     info!("Received shutdown signal, aborting");

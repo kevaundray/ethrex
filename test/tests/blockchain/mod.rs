@@ -4,6 +4,7 @@ mod bal_validate_tx_execution_tests;
 mod batch_tests;
 mod binary_tree_helpers;
 mod binary_tree_tests;
+mod binary_tree_transition_tests;
 mod canonical_commit_gate_tests;
 mod eip7702_revert_authority_tests;
 mod eip7702_zero_transfer_tests;
