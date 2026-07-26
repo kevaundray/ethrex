@@ -560,7 +560,7 @@ The non-negotiable invariant for every upgrade: **committed roots are bit-identi
 
 **Upgrade 2 — persist the flat state (Seam A).** Replace per-block full clones with the normalized form: backend tables for the *current* flat state (`PBT_ACCOUNTS`: address -> nonce/balance/code_hash; `PBT_STORAGE`: address ‖ slot -> value; code already lives in `ACCOUNT_CODES`) plus a small per-block **undo log** (the inverse of each block's diff) for reorg rewind — the same current-state+undo pattern ethrex's flat KV layers use. This is also *the* preimage table: the flat tables are keyed by real addresses/slots, so a restarted node materializes the shadow state by reading them instead of replaying from genesis, and an exported copy of these tables IS the offline-seeding artifact for snap-style joins. `get_pbt_state(hash)` becomes "current tables rewound/advanced to `hash`" for recent blocks. Solves restarts and memory in one move.
 
-**Transition machinery — mid-chain activation via shadow tracking (its own phase; consensus-visible, unlike the numbered upgrades).** This is where the real `Fork::BinaryTree` variant and `binaryTreeTime` config field land (timestamp activation is what fork variants are for; the full enum-plumbing map is in the appendix below) and the boolean flag is subsumed. The design is settled, deferred only for scoping: when `binaryTreeTime` is scheduled later than genesis, the node maintains `PbtState` from genesis anyway — alloc seed, per-block update application, NO root computation — and from the first block with `timestamp >= binaryTreeTime` the header commitment flips to the shadow state's root. Full-state commitment at any activation point, derivable from block history by any full-syncing node, spec-conformant, with genesis activation as the degenerate case (meaning Phase 1's code is a strict subset — the change is removing the genesis-only guard, running the snapshot loop pre-activation without validation, and adding boundary tests). Two things it must respect: carry-over is **consensus data** (all nodes shadow-track by rule; an empty-start overlay variant would be a different consensus rule, deliberately not built), and it sequences best AFTER Upgrade 2 — persisted flat tables make transition seeds for non-replaying nodes self-serve instead of hand-built artifacts.
+**Transition machinery — mid-chain activation via shadow tracking (its own phase; consensus-visible, unlike the numbered upgrades). STATUS: DONE except mainnet scale** — shipped on `kw/bin-trie-integration` per `docs/plans/2026-07-26-binary-tree-transition.md` (see "As-built: the binaryTreeTime transition" below); the persistence/seed-artifact story for real networks still rides on Upgrade 2 — unchanged. One divergence from the paragraph below: NO `Fork::BinaryTree` variant was added (rationale in the as-built section). Historical design text follows. This is where the real `Fork::BinaryTree` variant and `binaryTreeTime` config field land (timestamp activation is what fork variants are for; the full enum-plumbing map is in the appendix below) and the boolean flag is subsumed. The design is settled, deferred only for scoping: when `binaryTreeTime` is scheduled later than genesis, the node maintains `PbtState` from genesis anyway — alloc seed, per-block update application, NO root computation — and from the first block with `timestamp >= binaryTreeTime` the header commitment flips to the shadow state's root. Full-state commitment at any activation point, derivable from block history by any full-syncing node, spec-conformant, with genesis activation as the degenerate case (meaning Phase 1's code is a strict subset — the change is removing the genesis-only guard, running the snapshot loop pre-activation without validation, and adding boundary tests). Two things it must respect: carry-over is **consensus data** (all nodes shadow-track by rule; an empty-start overlay variant would be a different consensus rule, deliberately not built), and it sequences best AFTER Upgrade 2 — persisted flat tables make transition seeds for non-replaying nodes self-serve instead of hand-built artifacts.
 
 **Upgrade 3 — incremental root maintenance (Seam B).** Stop re-embedding the world per block. Prerequisites in `ethrex-binary-trie` (all flagged in that crate's docs): deletion in `BinaryTrie`, hash caching with dirty-path recomputation (the reviewer-recommended `&mut Node` insert rewrite lands here), and `TrieDB`-backed node storage for persistence. Then `compute_root` changes shape: the embedding layer maps each block's `AccountUpdate` diff to **tree-key-level operations** (inserts/updates/deletes of embedded keys — deletion of an account expands to its header-stem keys, its storage-zone keys, and reference-counted or rechecked overflow code chunks: the one semantic sharp edge, since content-addressed chunks are shared across accounts; the re-embed oracle is what keeps this honest), applied to a retained per-head trie. Per-block cost drops from O(state) to O(touched keys x depth). This is the point where the experimental fork could actually track a busy chain.
 
@@ -690,3 +690,93 @@ binary-tree tests use `TEST_GAS_LIMIT = 400_000`
 this: all upgrades still slot in behind Seam A (the snapshot registry) and
 Seam B (`PbtState::compute_root`), with bit-identical committed roots as
 the invariant.
+
+---
+
+## As-built: the `binaryTreeTime` transition (2026-07-26)
+
+The transition machinery from the roadmap above shipped
+(`docs/plans/2026-07-26-binary-tree-transition.md` is the plan; this
+section is the record). Verified live on a merged-from-genesis kurtosis
+devnet — see "Fast devnet" below.
+
+**Shipped semantics.** `binaryTreeTime` (camelCase in genesis JSON) is
+the SINGLE activation field — the `enableBinaryTreeAtGenesis` boolean
+was consolidated away in the same series (a time at or before the
+genesis timestamp, canonically `binaryTreeTime: 0`, is the
+genesis-activation spelling; the CLI sugar `--experimental.binary-tree`
+sets it to the genesis timestamp). Two predicates on `ChainConfig`
+carry the whole rule:
+
+- `binary_tree_scheduled()` — the field is set. Scheduled nodes
+  shadow-track `PbtState` from genesis: snapshot seeding at genesis,
+  per-block clone/apply/store, `mpt_lookup_roots` registration — the
+  identical loop genesis-activation runs, just without header
+  commitment or validation.
+- `is_binary_tree_active(ts)` — `binary_tree_time <= ts`. From the
+  first block at/after the time, `header.state_root` commits the shadow
+  state's PBT root (validated on import, produced by payload building)
+  and `eth_getProof` serves `pbt-getproof-v1`. Carry-over is the
+  consensus rule: the first active block commits the FULL state, not an
+  empty-start overlay.
+
+`--experimental.binary-tree-delay <seconds>` injects
+`binaryTreeTime = genesis.timestamp + delay` after genesis load — a
+relative delay (not an absolute time) is what a kurtosis yaml can
+express before genesis exists; every node given the same genesis and
+delay derives the same schedule. The scheduled time joins `gather_forks`
+(the `verkle_time` pattern), so it is part of the fork id: mismatched
+delays split at the flip, by design.
+
+**Per-header MPT resolution rule** (the key correctness subtlety):
+`mpt_state_root_for_header_opt` resolves through the
+`mpt_lookup_roots` registry ONLY when
+`is_binary_tree_active(header.timestamp)`; pre-activation headers
+return `header.state_root` directly — those roots genuinely ARE MPT
+roots. Consequences: pre-flip blocks stay readable across restarts
+without any replay, `eth_getProof` on pre-flip targets takes the
+untouched legacy MPT path, and an unscheduled chain is bit-identical
+to before the feature existed.
+
+**No `Fork::BinaryTree` enum variant (deliberate divergence from the
+roadmap text above).** The commitment flip is orthogonal to EVM
+semantics. A variant ordered after `Hegota` would make `get_fork()`
+report "BinaryTree" for post-flip blocks on (say) a Fulu-era chain,
+dragging wrong blob-schedule fallbacks and fork reporting along, and
+would re-couple exactly what Phase 1 decoupled. `binary_tree_time` is
+a standalone scheduled timestamp on `ChainConfig` — the exact
+`verkle_time` precedent. The enum appendix above stays parked for the
+day EEST fixture consumption needs a *named* fork (a tooling-level
+mapping anyway).
+
+**Restart contract, sharpened.** The registries are still in-memory
+(see "Limitation: in-memory registries"), and for a scheduled chain
+the recovery story has a hard edge: replay-from-genesis recovery
+requires re-executing every block, which requires the pre-flip MPT
+state still being addressable — but once a scheduled chain flushes
+past `DB_COMMIT_THRESHOLD`, replay-from-genesis recovery is
+impossible and only offline seeding (`put_pbt_state` /
+`put_mpt_lookup_root`) remains. Short-lived devnets restart fine;
+anything long-lived needs the Upgrade 2 persistence story.
+
+**Fast devnet — the payoff.**
+`fixtures/networks/binary-tree-devnet-fast.yaml` is a
+merged-from-genesis config (package defaults: altair..fulu all at
+epoch 0 — verified at the pinned ethereum-package revision; no fork
+ladder, no TTD games, stock lighthouse v8.1.3) with
+`--experimental.binary-tree-delay=30` as the only activation input.
+The generator's embedded MPT genesis hash is CORRECT because genesis
+genuinely is MPT-committed; the flip happens ~30s in. Contrast
+`binary-tree-devnet.yaml` (genesis activation), which needs the
+pre-merge TTD ladder precisely because its genesis hash differs from
+the generator's — that config stays for genesis-activation testing.
+Measured on the verification run (3x ethrex + lighthouse, 3s slots):
+first block ~26s after enclave-up (vs ~8 minutes of fork ladder on
+the slow variant); flip landed at block 10 (timestamp == genesis+30
+exactly); state roots identical across all 3 nodes at every height
+through and past the boundary; `eth_getProof` flipped shape at the
+boundary (legacy MPT at block 9, `pbt-getproof-v1` at block 10) and
+a live post-flip proof verified OFFLINE against the block-10 header
+root via the `verify_live_proof` example; a post-flip EIP-1559
+transfer mined with identical reads on all nodes; zero invalid
+fork-choice lines in EL logs.
