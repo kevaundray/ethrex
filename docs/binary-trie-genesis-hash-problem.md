@@ -35,29 +35,69 @@ everything downstream that names the chain.**
 This is not a quirk of our implementation. It is true of any client that
 changes the commitment at genesis, in any language.
 
-### 2. What the consensus layer does with it
+### 2. Background: why there is a "genesis generator" on the CL side
 
-For a merged-from-genesis network (all forks at epoch 0, the modern devnet
-default), the genesis generator produces two coupled artifacts from one input:
+Mainnet never had this problem, because nobody *creates* mainnet's genesis. It
+was created once, in 2015, and every client ships the resulting file; its hash
+is a historical constant you inherit rather than compute.
 
-- the execution-layer `genesis.json` (the alloc and chain config), and
-- the beacon genesis state, whose embedded execution payload header is derived
-  from the EL genesis block the generator just computed — including its block
-  hash.
+A brand-new network has no such inheritance — someone has to manufacture
+genesis. After the merge, that means manufacturing **two** artifacts that must
+agree with each other:
 
-The generator computes that EL genesis block hash using **MPT rules**, because
-that is the only state commitment Ethereum has. The CL therefore starts life
-holding an MPT-derived genesis hash as fact.
+- **The execution-layer genesis** — chain config (the fork schedule), the alloc
+  (prefunded accounts), gas limit, timestamp. Computing the state root over the
+  alloc and hashing the resulting header gives the EL genesis block hash.
+- **The consensus-layer genesis** — the beacon state at slot 0: the validator
+  registry (on a devnet, derived from a mnemonic), genesis time, fork versions.
 
-At startup the CL drives the EL over the engine API, referencing that hash as
-the head of the chain. If the EL computed a different genesis hash — which it
-does the moment its genesis header carries a PBT root — the EL does not
-recognise the hash the CL is asking about. The EL cannot answer affirmatively
-for a block it has never seen, so the handshake never completes and the chain
-never produces a block. The two layers are, correctly, describing different
-chains.
+These are not independent. After the merge the beacon chain is the authority on
+which chain is canonical, and every beacon block carries an execution payload
+that must chain back to a parent. At slot 0 there is no previous payload, so
+the beacon state itself carries the first execution header — the
+`latest_execution_payload_header` field — and that header contains the EL
+genesis block **hash**. In other words, the CL is *born already holding a
+specific opinion* about what the EL's genesis hash is.
 
-### 3. What the peer-to-peer layer does with it
+Someone has to compute that opinion, and it must come out byte-identical for
+every participant: if one CL's beacon state named one EL genesis hash and
+another CL's named a different one, the network would be split before the first
+slot was ever produced. Hence a single shared tool — `ethereum-genesis-generator`
+in the kurtosis stack — that takes one set of inputs and emits both artifacts
+consistently for every client in the enclave. It also saves each client team
+from reimplementing a cross-domain computation that needs EL rules (RLP,
+keccak, state root) *and* CL rules (SSZ, hash tree root) to agree exactly.
+
+If you know git, the analogy is tight: genesis is the initial commit. A commit's
+hash is derived from the tree it points at, so two people who each "create the
+same initial commit" but compute the tree differently end up with different
+commit hashes — and their repositories can never share history, no matter how
+identical the files look to a human. The generator is what guarantees everyone
+runs the equivalent of `git init` over byte-identical content, so they all land
+on the same first hash.
+
+**The load-bearing detail for this document:** when the generator computes that
+EL genesis block hash, it computes the state root using **Merkle-Patricia-Trie
+rules** — because that is the only state commitment Ethereum has ever had, in
+every client and every genesis tool ever written. The MPT assumption is not
+merely *present* in the tooling; the tooling *freezes it into the CL's beacon
+state* before ethrex has executed a single line of code.
+
+### 3. What the consensus layer does with it at runtime
+
+The CL therefore starts life holding an MPT-derived genesis hash as fact. It
+then drives the EL over the engine API, referencing that hash as the head of
+the chain.
+
+If the EL computed a different genesis hash — which it does the moment its
+genesis header carries a PBT root — the EL does not recognise the block the CL
+is asking about. It cannot answer affirmatively for a block it has never seen,
+so the handshake never completes and the chain never produces a block. The two
+layers are, correctly, describing different chains: identical accounts,
+identical balances, identical everything a human would look at, but a different
+chain identity.
+
+### 4. What the peer-to-peer layer does with it
 
 The genesis hash is also the seed of the fork id. In
 `crates/common/types/fork_id.rs`:
@@ -80,7 +120,7 @@ genesis hash itself. (A *scheduled* future time is different: it does join the
 fork id, mirroring `verkle_time`, so nodes with mismatched schedules split at
 the flip by design.)
 
-### 4. The observed failure mode
+### 5. The observed failure mode
 
 Before scheduled activation existed, the only way to run a genesis-activated
 devnet was `fixtures/networks/binary-tree-devnet.yaml`, which carries a
