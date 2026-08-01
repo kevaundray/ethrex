@@ -27,7 +27,7 @@ use ethrex_common::{
     types::{
         AccountInfo, AccountState, AccountUpdate, Block, BlockBody, BlockHash, BlockHeader,
         BlockNumber, ChainConfig, Code, CodeMetadata, ForkId, Genesis, GenesisAccount, Index,
-        PbtState, Receipt, Transaction,
+        PbtState, PbtStateError, Receipt, Transaction,
         block_access_list::BlockAccessList,
         block_execution_witness::{ExecutionWitness, RpcExecutionWitness},
     },
@@ -2621,6 +2621,15 @@ impl Store {
     /// future edits, not independent verification. A scheduled-later genesis
     /// passes `None`: its header commits the MPT root, which the snapshot's
     /// binary root can never (and must never) match.
+    ///
+    /// `None` still validates that the alloc is *embeddable*, just not what
+    /// it hashes to. Computing the root is how the `Some` path incidentally
+    /// proves that; without an equivalent check the `None` path would accept
+    /// an alloc the binary tree cannot represent (a balance ≥ 2^128 does not
+    /// fit the 16-byte basic-data field) and fail for the first time at the
+    /// flip block — where every node fails to import, the chain halts, and
+    /// no genesis balance can be changed retroactively. Startup is the last
+    /// moment the operator can still fix it.
     fn seed_genesis_pbt_snapshot(
         &self,
         genesis: &Genesis,
@@ -2628,15 +2637,56 @@ impl Store {
         expected_header_root: Option<H256>,
     ) -> Result<(), StoreError> {
         let pbt_state = PbtState::from_genesis_alloc(&genesis.alloc);
-        if let Some(header_state_root) = expected_header_root {
-            let pbt_root = pbt_state.compute_root()?;
-            if pbt_root != header_state_root {
-                return Err(StoreError::Custom(format!(
-                    "binary-tree genesis root mismatch: computed {pbt_root:#x} but the genesis header commits to {header_state_root:#x}"
-                )));
+        match expected_header_root {
+            Some(header_state_root) => {
+                let pbt_root = pbt_state.compute_root()?;
+                if pbt_root != header_state_root {
+                    return Err(StoreError::Custom(format!(
+                        "binary-tree genesis root mismatch: computed {pbt_root:#x} but the genesis header commits to {header_state_root:#x}"
+                    )));
+                }
+            }
+            None => {
+                if let Err(err) = pbt_state.validate_embeddable() {
+                    return Err(StoreError::Custom(Self::unembeddable_genesis_message(
+                        genesis, &err,
+                    )));
+                }
             }
         }
         self.put_pbt_state(genesis_hash, pbt_state)
+    }
+
+    /// Operator-facing explanation of an alloc the binary tree cannot
+    /// represent, on a chain whose commitment is scheduled for later.
+    /// Names the offending account when the cause is a balance, which is
+    /// the only embedding constraint a genesis alloc can plausibly trip
+    /// (the other, bytecode missing for a code hash, cannot arise from an
+    /// alloc — it carries its code inline).
+    fn unembeddable_genesis_message(genesis: &Genesis, err: &PbtStateError) -> String {
+        let limit = U256::one() << 128;
+        let offender = genesis
+            .alloc
+            .iter()
+            .find(|(_, account)| account.balance >= limit)
+            .map(|(address, account)| {
+                let balance = account.balance;
+                format!(" — account {address:#x} holds a balance of {balance}, at or above the 2^128 limit")
+            })
+            .unwrap_or_default();
+        let activation = genesis
+            .config
+            .binary_tree_time
+            .map(|time| time.to_string())
+            .unwrap_or_else(|| "unset".to_string());
+        format!(
+            "genesis alloc cannot be embedded in the experimental EIP-8297 binary tree: {err}{offender}. \
+             The binary-tree commitment is scheduled for timestamp {activation}, later than genesis, so \
+             the genesis header is unaffected — but the alloc is carried into the first active block, \
+             whose binary-tree root would then be uncomputable: every node fails to import that block \
+             and the chain halts at activation, with no way to change a genesis balance retroactively. \
+             Fix the genesis alloc now — every account balance must be below 2^128 (about 3.4e38 wei)."
+        )
     }
 
     /// Records the MPT root under which `block_hash`'s state is persisted.
@@ -4912,6 +4962,118 @@ mod pbt_genesis_tests {
         };
         genesis.config.binary_tree_time = Some(0);
         genesis
+    }
+
+    /// Address of the account the balance-limit tests over-fund.
+    const OVERFUNDED: u64 = 0xcc;
+
+    /// [`small_alloc`] plus an EOA at [`OVERFUNDED`] holding `balance`.
+    fn alloc_with_balance(balance: U256) -> BTreeMap<Address, GenesisAccount> {
+        let mut alloc = small_alloc();
+        alloc.insert(
+            Address::from_low_u64_be(OVERFUNDED),
+            GenesisAccount {
+                code: Bytes::new(),
+                storage: BTreeMap::new(),
+                balance,
+                nonce: 0,
+            },
+        );
+        alloc
+    }
+
+    /// Genesis whose commitment flips well after the genesis timestamp:
+    /// scheduled, but the genesis header still commits the MPT root.
+    fn binary_scheduled_later(alloc: BTreeMap<Address, GenesisAccount>) -> Genesis {
+        let mut genesis = Genesis {
+            alloc,
+            ..Default::default()
+        };
+        genesis.config.binary_tree_time = Some(1_000_000);
+        assert!(
+            !genesis.config.is_binary_tree_active(genesis.timestamp),
+            "test fixture must be scheduled but not active at genesis"
+        );
+        genesis
+    }
+
+    /// The alloc, not transactions, is the realistic source of a balance
+    /// the binary-tree basic-data field cannot hold. On a scheduled-later
+    /// chain nothing used to look at it until the flip block, where every
+    /// node would fail to import — so this must fail at startup instead.
+    #[tokio::test]
+    async fn scheduled_later_genesis_rejects_alloc_balance_over_the_binary_tree_limit() {
+        let mut store =
+            Store::new("test-pbt-overfunded", EngineType::InMemory).expect("in-memory store");
+
+        let err = store
+            .add_initial_state(binary_scheduled_later(alloc_with_balance(
+                U256::one() << 128,
+            )))
+            .await
+            .expect_err("an unembeddable genesis alloc must be rejected at startup");
+
+        let message = err.to_string();
+        assert!(
+            message.contains("binary-tree"),
+            "error must name the binary-tree commitment: {message}"
+        );
+        assert!(
+            message.contains("balance") || message.contains("Balance"),
+            "error must point at the balance constraint: {message}"
+        );
+        assert!(
+            message.contains(&format!("{:#x}", Address::from_low_u64_be(OVERFUNDED))),
+            "error must name the offending account so an operator can fix it: {message}"
+        );
+    }
+
+    /// The largest balance the 16-byte basic-data field holds is fine:
+    /// the guard must reject only what the embedding truly cannot take.
+    #[tokio::test]
+    async fn scheduled_later_genesis_accepts_the_maximum_embeddable_balance() {
+        let mut store =
+            Store::new("test-pbt-max-balance", EngineType::InMemory).expect("in-memory store");
+        store
+            .add_initial_state(binary_scheduled_later(alloc_with_balance(
+                (U256::one() << 128) - 1,
+            )))
+            .await
+            .expect("a balance at the embedding limit must initialize");
+    }
+
+    /// No `binaryTreeTime` means no binary-tree involvement at all: an
+    /// over-large balance stays legal, exactly as before this guard.
+    #[tokio::test]
+    async fn unscheduled_genesis_accepts_balance_over_the_binary_tree_limit() {
+        let mut store =
+            Store::new("test-pbt-unscheduled-huge", EngineType::InMemory).expect("in-memory store");
+        let genesis = Genesis {
+            alloc: alloc_with_balance(U256::one() << 128),
+            ..Default::default()
+        };
+        assert!(!genesis.config.binary_tree_scheduled());
+        store
+            .add_initial_state(genesis)
+            .await
+            .expect("an unscheduled chain must not care about binary-tree constraints");
+    }
+
+    /// Genesis activation already refused an unembeddable alloc, via the
+    /// root the genesis header commits to (`Genesis::compute_state_root`
+    /// has no error channel, so it fails loudly rather than as an `Err`).
+    /// Pinned here so the two activation modes stay symmetric.
+    #[tokio::test]
+    #[should_panic(expected = "genesis alloc must satisfy binary-tree constraints")]
+    async fn genesis_activated_alloc_over_the_limit_still_fails_at_startup() {
+        let mut store =
+            Store::new("test-pbt-active-huge", EngineType::InMemory).expect("in-memory store");
+        let mut genesis = Genesis {
+            alloc: alloc_with_balance(U256::one() << 128),
+            ..Default::default()
+        };
+        genesis.config.binary_tree_time = Some(0);
+        let _ = store.add_initial_state(genesis).await;
     }
 
     #[tokio::test]

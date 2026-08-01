@@ -156,6 +156,20 @@ impl PbtState {
         Ok(rebuild_root(&self.embed_entries()?))
     }
 
+    /// Check that every account in this state can be embedded — balances
+    /// fit the 16-byte basic-data field, bytecode is present for every
+    /// non-empty code hash — without paying for merkleization.
+    ///
+    /// Same failure set as [`Self::compute_root`]'s embedding step (the
+    /// only errors either can raise), at O(state) embedding cost but no
+    /// hashing. For callers that need the constraint answer and not the
+    /// root: a chain with the commitment scheduled for a later timestamp
+    /// must know at startup that its state will be embeddable at the
+    /// flip, long before it ever computes a binary root.
+    pub fn validate_embeddable(&self) -> Result<(), PbtStateError> {
+        self.embed_entries().map(|_| ())
+    }
+
     /// Materialize this state's binary trie, for proof generation
     /// (`eth_getProof`): the returned [`BinaryTrie`] answers
     /// [`BinaryTrie::prove`] / `get` for embedded tree keys, and its
@@ -502,6 +516,39 @@ mod tests {
 
         state.accounts.get_mut(&addr(1)).unwrap().balance = (U256::one() << 128) - 1;
         assert!(state.compute_root().is_ok());
+    }
+
+    /// `validate_embeddable` answers the same question as `compute_root`
+    /// about whether the state can be embedded, without merkleizing.
+    #[test]
+    fn validate_embeddable_agrees_with_compute_root() {
+        let mut state = PbtState::default();
+        state
+            .accounts
+            .insert(addr(1), eoa_account(0, U256::one() << 128));
+        assert!(matches!(
+            state.validate_embeddable().unwrap_err(),
+            PbtStateError::Trie(ethrex_binary_trie::BinaryTrieError::BalanceTooLarge)
+        ));
+        assert!(state.compute_root().is_err());
+
+        state.accounts.get_mut(&addr(1)).unwrap().balance = (U256::one() << 128) - 1;
+        assert!(state.validate_embeddable().is_ok());
+        assert!(state.compute_root().is_ok());
+
+        // Missing bytecode is an embedding failure too, not just balances.
+        let dangling = H256::repeat_byte(0xab);
+        state.accounts.insert(
+            addr(2),
+            PbtAccount {
+                code_hash: dangling,
+                ..Default::default()
+            },
+        );
+        assert!(matches!(
+            state.validate_embeddable().unwrap_err(),
+            PbtStateError::CodeMissing(h) if h == dangling
+        ));
     }
 
     #[test]

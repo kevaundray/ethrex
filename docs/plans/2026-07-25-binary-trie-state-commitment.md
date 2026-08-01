@@ -795,6 +795,20 @@ must pin the mode — both devnet yamls now carry `--syncmode=full` in
 `el_extra_params` (the prior verified run predated the guard and
 never exercised syncmode).
 
+Second corollary guard (mode 1's own late-failure hole): a
+scheduled-later genesis is now checked for *embeddability* at seeding
+time (`PbtState::validate_embeddable` from `seed_genesis_pbt_snapshot`,
+`crates/storage/store.rs`) — the constraint check without the
+merkleize. Genesis activation always had this incidentally, since it
+computes the root to compare against the header; the scheduled-later
+path passed `None` and looked at nothing, so an alloc the tree cannot
+represent (a balance ≥ 2^128 overflowing the 16-byte basic-data field —
+reachable via the common `0xffff…` sentinel-balance idiom) would boot
+silently and first fail at the flip block, unimportable on every node,
+with no retroactive fix. The error names the offending account and
+says the chain would halt at activation. Unscheduled chains are
+untouched.
+
 **Fast devnet — the payoff.**
 `fixtures/networks/binary-tree-devnet-fast.yaml` is a
 merged-from-genesis config (package defaults: altair..fulu all at
