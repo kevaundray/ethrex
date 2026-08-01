@@ -39,6 +39,15 @@ participants:
 
 ethereum_metrics_exporter_enabled: true
 
+# Pinned explicitly, though it matches the package default: this image
+# computes the EL genesis block hash (under MPT rules) and embeds it in the
+# beacon genesis state. That is precisely the hash this config's genesis
+# activation cannot match, which is why the TTD ladder below exists — so the
+# version producing it should be visible here rather than riding on
+# ETHEREUM_PACKAGE_REVISION. See docs/binary-trie-genesis-hash-problem.md.
+ethereum_genesis_generator_params:
+  image: ethpandaops/ethereum-genesis-generator:6.0.7
+
 network_params:
   seconds_per_slot: 3
   # CRITICAL for the binary-tree flag: a merged-at-genesis beacon chain embeds

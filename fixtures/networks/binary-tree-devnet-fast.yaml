@@ -29,6 +29,15 @@ participants:
 
 ethereum_metrics_exporter_enabled: true
 
+# Pinned explicitly, though it matches the package default: this image
+# computes the EL genesis block hash (under MPT rules) and embeds it in the
+# beacon genesis state, so it is the component the CL's view of genesis
+# comes from. Left implicit, its version would ride on
+# ETHEREUM_PACKAGE_REVISION and could change underneath us on a package
+# bump. See docs/binary-trie-genesis-hash-problem.md.
+ethereum_genesis_generator_params:
+  image: ethpandaops/ethereum-genesis-generator:6.0.7
+
 network_params:
   seconds_per_slot: 3
   # NO fork_epoch overrides: the package defaults are all-at-genesis
