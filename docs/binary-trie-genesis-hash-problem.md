@@ -53,11 +53,20 @@ agree with each other:
 
 These are not independent. After the merge the beacon chain is the authority on
 which chain is canonical, and every beacon block carries an execution payload
-that must chain back to a parent. At slot 0 there is no previous payload, so
-the beacon state itself carries the first execution header — the
-`latest_execution_payload_header` field — and that header contains the EL
-genesis block **hash**. In other words, the CL is *born already holding a
-specific opinion* about what the EL's genesis hash is.
+that must chain back to a parent. The chain therefore needs a parent to start
+from, and that parent is EL **block 0** — which no slot produces; the generator
+manufactures it directly from the alloc. The beacon *state* at slot 0 records
+it, in the `latest_execution_payload_header` field, including EL block 0's
+**hash**. (The beacon *block* at slot 0 is a placeholder with an empty body; the
+pointer lives in the state, not the block. This is also why
+`is_merge_transition_complete` — defined as "that field is not the default
+value" — reports true from slot 0 on a merged-from-genesis network.) In other
+words, the CL is *born already holding a specific opinion* about what the EL's
+genesis hash is.
+
+The first execution block consensus actually produces is EL block 1, in the
+first proposed beacon block, and its `parent_hash` must equal the block hash
+recorded in that field.
 
 Someone has to compute that opinion, and it must come out byte-identical for
 every participant: if one CL's beacon state named one EL genesis hash and
@@ -92,10 +101,11 @@ the chain.
 If the EL computed a different genesis hash — which it does the moment its
 genesis header carries a PBT root — the EL does not recognise the block the CL
 is asking about. It cannot answer affirmatively for a block it has never seen,
-so the handshake never completes and the chain never produces a block. The two
-layers are, correctly, describing different chains: identical accounts,
-identical balances, identical everything a human would look at, but a different
-chain identity.
+so the handshake never completes and the chain never produces a block. Nor
+could the first payload ever be accepted: its `parent_hash` would have to name
+a block 0 that the EL does not have. The two layers are, correctly, describing
+different chains: identical accounts, identical balances, identical everything
+a human would look at, but a different chain identity.
 
 ### 4. What the peer-to-peer layer does with it
 
