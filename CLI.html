@@ -34,7 +34,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-1b62f9ec.js";
+            window.path_to_searchindex_js = "searchindex-7ba10d97.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-586b7da3.js"></script>
@@ -303,6 +303,11 @@ Node options:
           
           [env: ETHREX_PRECOMPUTE_WITNESSES=]
 
+      --max-reorg-depth &lt;MAX_REORG_DEPTH&gt;
+          Optional operator override for the maximum reorg depth. Omit for finality-bounded cap. Set to 0 to disable deep reorgs entirely. Set to d to reject reorgs of depth &gt; d.
+          
+          [env: ETHREX_MAX_REORG_DEPTH=]
+
 P2P options:
       --bootnodes &lt;BOOTNODE_LIST&gt;...
           Comma separated enode URLs for P2P discovery bootstrap.
@@ -486,7 +491,7 @@ Options:
 
 Node options:
       --network &lt;GENESIS_FILE_PATH&gt;
-          Alternatively, the name of a known network can be provided instead to use its preset genesis file and include its preset bootnodes. The networks currently supported include holesky, sepolia, hoodi and mainnet. If not specified, defaults to mainnet.
+          Alternatively, the name of a known network can be provided instead to use its preset genesis file and include its preset bootnodes. The networks currently supported include sepolia, hoodi and mainnet. If not specified, defaults to mainnet.
 
           [env: ETHREX_NETWORK=]
 
