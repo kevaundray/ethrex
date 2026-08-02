@@ -14,6 +14,7 @@ repository.workspace = true
 ethrex-rlp.workspace = true
 ethrex-trie.workspace = true
 ethrex-crypto.workspace = true
+ethrex-binary-trie.workspace = true
 
 tracing.workspace = true
 ethereum-types.workspace = true

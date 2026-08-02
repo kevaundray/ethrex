@@ -1,0 +1,52 @@
+//! Node hashing: the leaf and branch preimages that commit the
+//! tree's contents to a single BLAKE3 root.
+
+use ethereum_types::H256;
+
+use super::bits::encode_bit_prefix;
+
+/// Root hash of an empty tree: a 32-zero-byte sentinel, not a hash output.
+pub const EMPTY_TRIE_ROOT: H256 = H256([0u8; 32]);
+
+pub const LEAF_NODE_TAG: u8 = 0x00;
+pub const BRANCH_NODE_TAG: u8 = 0x01;
+
+pub(crate) fn blake3_hash(data: &[u8]) -> H256 {
+    H256(*blake3::hash(data).as_bytes())
+}
+
+/// Hash preimage of a leaf: `0x00 ‖ full_key ‖ value`. The complete
+/// key is committed so a leaf's meaning never depends on the path
+/// taken to reach it. Public because proofs are lists of exactly
+/// these preimages (see [`super::proof`]).
+pub fn leaf_preimage(key: &[u8], value: &[u8; 32]) -> Vec<u8> {
+    let mut preimage = Vec::with_capacity(1 + key.len() + 32);
+    preimage.push(LEAF_NODE_TAG);
+    preimage.extend_from_slice(key);
+    preimage.extend_from_slice(value);
+    preimage
+}
+
+/// Hash preimage of a branch:
+/// `0x01 ‖ encode_bit_prefix(prefix) ‖ left ‖ right`. Public because
+/// proofs are lists of exactly these preimages (see [`super::proof`]).
+pub fn branch_preimage(prefix: &[u8], left: H256, right: H256) -> Vec<u8> {
+    let encoded_prefix = encode_bit_prefix(prefix);
+    let mut preimage = Vec::with_capacity(1 + encoded_prefix.len() + 64);
+    preimage.push(BRANCH_NODE_TAG);
+    preimage.extend_from_slice(&encoded_prefix);
+    preimage.extend_from_slice(left.as_bytes());
+    preimage.extend_from_slice(right.as_bytes());
+    preimage
+}
+
+/// Hash committing to a leaf: `blake3(0x00 ‖ full_key ‖ value)`.
+pub fn leaf_hash(key: &[u8], value: &[u8; 32]) -> H256 {
+    blake3_hash(&leaf_preimage(key, value))
+}
+
+/// Hash committing to a branch:
+/// `blake3(0x01 ‖ encode_bit_prefix(prefix) ‖ left ‖ right)`.
+pub fn branch_hash(prefix: &[u8], left: H256, right: H256) -> H256 {
+    blake3_hash(&branch_preimage(prefix, left, right))
+}

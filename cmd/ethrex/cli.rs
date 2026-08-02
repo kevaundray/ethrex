@@ -156,6 +156,49 @@ pub struct Options {
     )]
     pub dev: bool,
     #[arg(
+        long = "experimental.binary-tree",
+        action = ArgAction::SetTrue,
+        help = "EXPERIMENTAL: commit state through the EIP-8297 binary trie",
+        long_help = "EXPERIMENTAL: activate the EIP-8297 commitment at genesis: sets \
+                     `binaryTreeTime` to the genesis timestamp on the loaded genesis, making \
+                     genesis and block state roots EIP-8297 Partitioned-Binary-Tree roots \
+                     instead of MPT roots. Sugar for `binaryTreeTime: <genesis timestamp>` \
+                     (or any earlier time, e.g. 0) in the genesis JSON; exists so stock \
+                     genesis generators (e.g. kurtosis/ethereum-package) can run binary-tree \
+                     devnets without emitting the custom field. Every node on the network \
+                     must agree on it — nodes that disagree diverge at the genesis hash. \
+                     Rejected if the genesis JSON already sets `binaryTreeTime`. To flip \
+                     mid-chain instead, use the scheduled alternative \
+                     --experimental.binary-tree-delay.",
+        help_heading = "Node options",
+        env = "ETHREX_EXPERIMENTAL_BINARY_TREE"
+    )]
+    pub experimental_binary_tree: bool,
+    #[arg(
+        long = "experimental.binary-tree-delay",
+        value_name = "SECONDS",
+        conflicts_with = "experimental_binary_tree",
+        help = "EXPERIMENTAL: schedule the EIP-8297 commitment flip at genesis timestamp + delay",
+        long_help = "EXPERIMENTAL: sets `binaryTreeTime = genesis.timestamp + delay` on the \
+                     loaded genesis before genesis processing. Unlike \
+                     --experimental.binary-tree this does NOT change the genesis hash (genesis \
+                     and pre-flip blocks stay MPT-committed), but the scheduled time joins the \
+                     fork id, so ALL nodes must launch with the same delay (and the same \
+                     genesis) or they split at the flip. The chain is MPT-committed until the \
+                     flip and Partitioned-Binary-Tree-committed after; nodes shadow-track the \
+                     binary trie from genesis. A relative delay (not an absolute timestamp) is \
+                     what makes this usable from stock genesis generators (e.g. kurtosis \
+                     el_extra_params) that don't emit the custom field. Rejected if the \
+                     genesis JSON already sets `binaryTreeTime`. The schedule is NOT \
+                     persisted or genesis-hash-enforced: re-supply the identical delay on \
+                     every boot, or the node reopens unscheduled and fails loudly at the \
+                     first post-flip block. Mutually exclusive with \
+                     --experimental.binary-tree.",
+        help_heading = "Node options",
+        env = "ETHREX_EXPERIMENTAL_BINARY_TREE_DELAY"
+    )]
+    pub experimental_binary_tree_delay: Option<u64>,
+    #[arg(
         long = "log.level",
         default_value_t = Level::INFO,
         value_name = "LOG_LEVEL",
@@ -518,6 +561,8 @@ impl Default for Options {
             log_level: Level::INFO,
             log_color: Default::default(),
             log_dir: None,
+            experimental_binary_tree: false,
+            experimental_binary_tree_delay: None,
             authrpc_addr: Default::default(),
             authrpc_port: Default::default(),
             authrpc_jwtsecret: Default::default(),
@@ -1460,6 +1505,37 @@ mod tests {
                 RpcNamespace::Debug,
                 RpcNamespace::Admin,
             ]
+        );
+    }
+
+    #[test]
+    fn binary_tree_delay_parses_seconds() {
+        let cli = CLI::parse_from(["ethrex", "--experimental.binary-tree-delay", "20"]);
+        assert_eq!(cli.opts.experimental_binary_tree_delay, Some(20));
+        assert!(!cli.opts.experimental_binary_tree);
+    }
+
+    #[test]
+    fn binary_tree_delay_defaults_to_none() {
+        let cli = CLI::parse_from(["ethrex"]);
+        assert_eq!(cli.opts.experimental_binary_tree_delay, None);
+    }
+
+    /// Genesis-activation and scheduled activation are mutually exclusive on
+    /// the CLI: both flags write the single `binaryTreeTime` field, so
+    /// accepting both would be ambiguous — reject at parse time with a clear
+    /// clap message.
+    #[test]
+    fn binary_tree_delay_conflicts_with_genesis_flag() {
+        let result = CLI::try_parse_from([
+            "ethrex",
+            "--experimental.binary-tree",
+            "--experimental.binary-tree-delay",
+            "20",
+        ]);
+        assert!(
+            result.is_err(),
+            "--experimental.binary-tree and --experimental.binary-tree-delay must conflict"
         );
     }
 }

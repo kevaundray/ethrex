@@ -296,6 +296,20 @@ pub struct ChainConfig {
 
     #[serde(default)]
     pub enable_verkle_at_genesis: bool,
+
+    /// Experimental EIP-8297 commitment activation timestamp — the single
+    /// activation field. From the first block with `timestamp >=
+    /// binary_tree_time`, headers commit Partitioned-Binary-Tree state
+    /// roots instead of MPT roots; nodes shadow-track the flat state from
+    /// genesis so the flip commits the FULL state (consensus rule:
+    /// carry-over, not empty-start). Activation from genesis is a time at
+    /// or before the genesis timestamp, canonically `binaryTreeTime: 0`
+    /// (at-or-before-genesis times never join the fork id — `gather_forks`
+    /// keeps only times strictly after genesis — the divergence is the
+    /// genesis hash itself, since the genesis state root differs). Not an
+    /// EVM fork: deliberately NOT a `Fork` variant (commitment is
+    /// orthogonal to execution semantics; cf. `verkle_time`).
+    pub binary_tree_time: Option<u64>,
 }
 
 lazy_static::lazy_static! {
@@ -436,6 +450,29 @@ impl ChainConfig {
         self.eip155_block.is_some_and(|num| num <= block_number)
     }
 
+    /// Is the EIP-8297 binary-tree commitment scheduled on this chain
+    /// (`binary_tree_time` set — whether at/before genesis or mid-chain)?
+    ///
+    /// Consensus rule: `scheduled ⇒ shadow-track from genesis` — every node
+    /// on a scheduled chain maintains the flat-state (PBT) snapshot chain
+    /// from genesis, so the activation block can commit the FULL state
+    /// (carry-over, not empty-start).
+    pub fn binary_tree_scheduled(&self) -> bool {
+        self.binary_tree_time.is_some()
+    }
+
+    /// Is the EIP-8297 binary-tree commitment active at `block_timestamp`?
+    ///
+    /// Consensus rule: `active(block.timestamp) ⇒ the header commits the
+    /// shadow state's Partitioned-Binary-Tree root` (and is validated
+    /// against it); pre-activation headers keep MPT roots. "Active from
+    /// genesis" is the degenerate case of a time at or before the genesis
+    /// timestamp, spelled `binaryTreeTime: 0` in genesis JSON.
+    pub fn is_binary_tree_active(&self, block_timestamp: u64) -> bool {
+        self.binary_tree_time
+            .is_some_and(|time| time <= block_timestamp)
+    }
+
     pub fn display_config(&self) -> String {
         let network = NETWORK_NAMES.get(&self.chain_id).unwrap_or(&"unknown");
         let mut output = format!("Chain ID: {} ({})\n\n", self.chain_id, network);
@@ -448,6 +485,9 @@ impl ChainConfig {
             ("Osaka", self.osaka_time),
             ("Amsterdam", self.amsterdam_time),
             ("Hegota", self.hegota_time),
+            // Not an EVM fork (no `Fork` variant) — the scheduled EIP-8297
+            // commitment flip, displayed alongside the timestamped forks.
+            ("BinaryTree", self.binary_tree_time),
         ];
 
         let active_forks: Vec<_> = post_merge_forks
@@ -695,6 +735,7 @@ impl ChainConfig {
             self.amsterdam_time,
             self.hegota_time,
             self.verkle_time,
+            self.binary_tree_time,
         ]
         .into_iter()
         .flatten()
@@ -811,6 +852,28 @@ impl Genesis {
     }
 
     pub fn compute_state_root(&self) -> H256 {
+        // Experimental EIP-8297: when the commitment is active AT the
+        // genesis timestamp (a binary_tree_time <= the genesis timestamp,
+        // canonically 0) the genesis commits to the binary-tree root
+        // instead of the MPT root; a later-scheduled genesis keeps the MPT
+        // root until the flip. Genesis construction has no error channel;
+        // the only failure is an alloc that violates the binary-tree
+        // constraints, which is a malformed-genesis bug.
+        if self.config.is_binary_tree_active(self.timestamp) {
+            return crate::types::PbtState::from_genesis_alloc(&self.alloc)
+                .compute_root()
+                .expect("genesis alloc must satisfy binary-tree constraints (balances < 2^128)");
+        }
+        self.compute_mpt_state_root()
+    }
+
+    /// The MPT root of the genesis alloc, regardless of what the header
+    /// commits to. Identical to [`Genesis::compute_state_root`] unless the
+    /// binary-tree commitment is active at the genesis timestamp; when it
+    /// is, the header carries the binary-tree root instead, and this is the
+    /// root under which the MPT lookup structure is stored (the store's
+    /// side-registry entry).
+    pub fn compute_mpt_state_root(&self) -> H256 {
         let iter = self.alloc.iter().map(|(addr, account)| {
             (
                 keccak_hash(addr).to_vec(),
@@ -873,6 +936,201 @@ mod tests {
             err.to_string().contains("finite, non-negative"),
             "error should name the sign/finiteness cause, got: {err}"
         );
+    }
+
+    #[test]
+    fn binary_tree_time_zero_activates_at_genesis() {
+        let config = ChainConfig::default();
+        assert!(!config.binary_tree_scheduled());
+
+        let dca = r#""depositContractAddress":"0x00000000219ab540356cbb839cbe05303d7705fa""#;
+
+        // "Active from genesis" is spelled as a time at/before the genesis
+        // timestamp, canonically `binaryTreeTime: 0`.
+        let parsed: ChainConfig =
+            serde_json::from_str(&format!(r#"{{"chainId":1,"binaryTreeTime":0,{dca}}}"#))
+                .expect("config with binaryTreeTime should parse");
+        assert_eq!(parsed.binary_tree_time, Some(0));
+        assert!(parsed.binary_tree_scheduled());
+        assert!(parsed.is_binary_tree_active(0));
+
+        // absent from JSON -> unscheduled
+        let parsed: ChainConfig = serde_json::from_str(&format!(r#"{{"chainId":1,{dca}}}"#))
+            .expect("config without binaryTreeTime should parse");
+        assert!(!parsed.binary_tree_scheduled());
+    }
+
+    #[test]
+    fn binary_tree_time_schedules_and_activates() {
+        let mut config = ChainConfig::default();
+        assert!(!config.binary_tree_scheduled());
+        assert!(!config.is_binary_tree_active(u64::MAX));
+
+        config.binary_tree_time = Some(1000);
+        assert!(config.binary_tree_scheduled());
+        assert!(!config.is_binary_tree_active(999));
+        assert!(config.is_binary_tree_active(1000));
+        assert!(config.is_binary_tree_active(1001));
+
+        // Genesis activation is the degenerate case: a time at/before the
+        // genesis timestamp (e.g. 0) is scheduled AND active from block 0.
+        let genesis_active = ChainConfig {
+            binary_tree_time: Some(0),
+            ..Default::default()
+        };
+        assert!(genesis_active.binary_tree_scheduled());
+        assert!(genesis_active.is_binary_tree_active(0));
+    }
+
+    #[test]
+    fn binary_tree_time_serde_camel_case() {
+        let dca = r#""depositContractAddress":"0x00000000219ab540356cbb839cbe05303d7705fa""#;
+
+        let parsed: ChainConfig =
+            serde_json::from_str(&format!(r#"{{"chainId":1,"binaryTreeTime":1000,{dca}}}"#))
+                .expect("config with binaryTreeTime should parse");
+        assert_eq!(parsed.binary_tree_time, Some(1000));
+
+        // absent from JSON -> None (unscheduled)
+        let parsed: ChainConfig = serde_json::from_str(&format!(r#"{{"chainId":1,{dca}}}"#))
+            .expect("config without binaryTreeTime should parse");
+        assert_eq!(parsed.binary_tree_time, None);
+    }
+
+    #[test]
+    fn binary_tree_time_joins_fork_id_when_scheduled() {
+        use crate::types::ForkId;
+
+        let genesis_header = BlockHeader::default(); // timestamp 0
+
+        let unscheduled = ChainConfig::default();
+        let scheduled = ChainConfig {
+            binary_tree_time: Some(1000),
+            ..Default::default()
+        };
+
+        // gather_forks: a scheduled time strictly after genesis joins the
+        // timestamp-based fork inputs; None contributes nothing.
+        let (_, ts_forks) = scheduled.gather_forks(genesis_header.clone());
+        assert!(
+            ts_forks.contains(&1000),
+            "scheduled binary_tree_time must appear in the fork-id inputs"
+        );
+        let (_, ts_forks) = unscheduled.gather_forks(genesis_header.clone());
+        assert!(
+            ts_forks.is_empty(),
+            "unscheduled config must contribute no timestamp forks"
+        );
+
+        // ForkId: configs differing only in binary_tree_time disagree
+        // pre-activation (fork_next advertises the pending flip)...
+        let scheduled_id = ForkId::new(scheduled, genesis_header.clone(), 0, 0);
+        let unscheduled_id = ForkId::new(unscheduled, genesis_header.clone(), 0, 0);
+        assert_ne!(
+            scheduled_id, unscheduled_id,
+            "scheduled binary_tree_time must alter the fork id"
+        );
+
+        // ...while None == unscheduled: identical configs, identical id.
+        let twin_id = ForkId::new(unscheduled, genesis_header, 0, 0);
+        assert_eq!(unscheduled_id, twin_id);
+    }
+
+    #[test]
+    fn binary_tree_genesis_activation_swaps_state_root_commitment() {
+        use crate::types::PbtState;
+
+        let mut alloc: BTreeMap<Address, GenesisAccount> = BTreeMap::new();
+        alloc.insert(
+            Address::from_low_u64_be(0xaa),
+            GenesisAccount {
+                code: Bytes::new(),
+                storage: BTreeMap::new(),
+                balance: U256::from(1_000_000u64),
+                nonce: 1,
+            },
+        );
+        let mut storage = BTreeMap::new();
+        storage.insert(U256::from(1), U256::from(7));
+        alloc.insert(
+            Address::from_low_u64_be(0xbb),
+            GenesisAccount {
+                code: Bytes::from_static(&[0x60, 0x01]),
+                storage,
+                balance: U256::from(2u64),
+                nonce: 0,
+            },
+        );
+
+        let mut genesis = Genesis {
+            alloc,
+            ..Default::default()
+        };
+
+        let mpt_root = genesis.compute_state_root();
+
+        genesis.config.binary_tree_time = Some(0);
+        let pbt_root = genesis.compute_state_root();
+
+        assert_eq!(
+            pbt_root,
+            PbtState::from_genesis_alloc(&genesis.alloc)
+                .compute_root()
+                .expect("test balances fit the 2^128 cap"),
+            "genesis-activated genesis must commit to the binary-tree root"
+        );
+        assert_ne!(
+            pbt_root, mpt_root,
+            "binary-tree root must differ from the MPT root for the same alloc"
+        );
+    }
+
+    #[test]
+    fn compute_state_root_follows_activation_at_genesis_timestamp() {
+        use crate::types::PbtState;
+
+        let mut alloc: BTreeMap<Address, GenesisAccount> = BTreeMap::new();
+        alloc.insert(
+            Address::from_low_u64_be(0xaa),
+            GenesisAccount {
+                code: Bytes::new(),
+                storage: BTreeMap::new(),
+                balance: U256::from(1_000_000u64),
+                nonce: 1,
+            },
+        );
+        let mut genesis = Genesis {
+            alloc,
+            timestamp: 1000,
+            ..Default::default()
+        };
+        let mpt_root = genesis.compute_mpt_state_root();
+        let pbt_root = PbtState::from_genesis_alloc(&genesis.alloc)
+            .compute_root()
+            .expect("test balances fit the 2^128 cap");
+        assert_ne!(mpt_root, pbt_root);
+
+        // Scheduled AFTER genesis: the genesis header keeps the MPT root
+        // (shadow tracking runs, but nothing is committed yet).
+        genesis.config.binary_tree_time = Some(genesis.timestamp + 100);
+        assert_eq!(
+            genesis.compute_state_root(),
+            mpt_root,
+            "scheduled-later genesis must commit the MPT root"
+        );
+
+        // Active AT genesis (time <= timestamp): binary root.
+        genesis.config.binary_tree_time = Some(genesis.timestamp);
+        assert_eq!(
+            genesis.compute_state_root(),
+            pbt_root,
+            "genesis active at its own timestamp must commit the binary root"
+        );
+
+        // Scheduled BEFORE genesis (canonically 0) is equally active at
+        // genesis — the "active from genesis" spelling.
+        genesis.config.binary_tree_time = Some(0);
+        assert_eq!(genesis.compute_state_root(), pbt_root);
     }
 
     #[test]

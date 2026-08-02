@@ -8,7 +8,7 @@ use crate::{
 };
 use ethrex_blockchain::{Blockchain, BlockchainOptions, BlockchainType};
 use ethrex_common::fd_limit::raise_fd_limit;
-use ethrex_common::types::Genesis;
+use ethrex_common::types::{ChainConfig, Genesis};
 use ethrex_config::networks::Network;
 use ethrex_rpc::WebSocketConfig;
 
@@ -403,14 +403,12 @@ pub async fn init_dev_network(
 ) {
     info!("Running in DEV_MODE");
 
-    let head_block_hash = {
-        let current_block_number = store.get_latest_block_number().await.unwrap();
-        store
-            .get_canonical_block_hash(current_block_number)
-            .await
-            .unwrap()
-            .unwrap()
-    };
+    let head_block_number = store.get_latest_block_number().await.unwrap();
+    let head_block_hash = store
+        .get_canonical_block_hash(head_block_number)
+        .await
+        .unwrap()
+        .unwrap();
 
     let max_tries = 3;
 
@@ -423,6 +421,8 @@ pub async fn init_dev_network(
         url,
         read_jwtsecret_file(&opts.authrpc_jwtsecret),
         head_block_hash,
+        head_block_number,
+        store.get_chain_config(),
         max_tries,
         1000,
         ethrex_common::Address::default(),
@@ -718,6 +718,85 @@ async fn set_sync_block(store: &Store) {
     }
 }
 
+/// Applies the experimental EIP-8297 CLI activation sugar to the loaded
+/// genesis, before the genesis hash/state root are computed so every node
+/// given the same genesis file and flags derives the identical config.
+///
+/// `--experimental.binary-tree` is sugar for activation-at-genesis: it sets
+/// `binaryTreeTime = genesis.timestamp`, equivalent to writing
+/// `binaryTreeTime: <genesis timestamp>` (or any earlier time, e.g. 0) in
+/// the genesis JSON — the genesis state root, and therefore the genesis
+/// hash, becomes the binary-tree root, so `add_initial_state`'s
+/// genesis-hash comparison enforces the same choice on reopen.
+/// `--experimental.binary-tree-delay N` schedules the flip at
+/// `genesis.timestamp + N` (genesis hash unchanged; the time joins the
+/// fork id).
+///
+/// clap's `conflicts_with` guards the two CLI flags against each other;
+/// a genesis JSON that already sets `binaryTreeTime` combined with either
+/// flag is a hard error HERE — both flags write that single field, and
+/// silently overwriting the file's schedule would fork the node off any
+/// peer that honors the file.
+fn apply_binary_tree_overrides(genesis: &mut Genesis, opts: &Options) -> eyre::Result<()> {
+    let flag = if opts.experimental_binary_tree {
+        "--experimental.binary-tree"
+    } else if opts.experimental_binary_tree_delay.is_some() {
+        "--experimental.binary-tree-delay"
+    } else {
+        return Ok(());
+    };
+
+    if let Some(time) = genesis.config.binary_tree_time {
+        return Err(eyre::eyre!(
+            "{flag} conflicts with the loaded genesis, which already sets \
+             `binaryTreeTime: {time}`: refusing to silently overwrite the file's \
+             schedule; drop the CLI flag or remove the genesis field"
+        ));
+    }
+
+    let binary_tree_time = if let Some(delay) = opts.experimental_binary_tree_delay {
+        let time = genesis.timestamp.saturating_add(delay);
+        warn!(
+            "EXPERIMENTAL: scheduling the EIP-8297 binary-trie commitment flip at \
+             timestamp {time} (genesis timestamp + {delay}s, {flag})"
+        );
+        time
+    } else {
+        warn!(
+            "EXPERIMENTAL: committing state through the EIP-8297 binary trie from genesis ({flag})"
+        );
+        genesis.timestamp
+    };
+    genesis.config.binary_tree_time = Some(binary_tree_time);
+    Ok(())
+}
+
+/// Refuses snap sync on a binary-tree-scheduled chain, loudly, at startup.
+///
+/// Snap sync is MPT-shaped and binary-tree-unaware: it pivots on a recent
+/// header and downloads the trie behind its `state_root`, but on a chain
+/// with `binaryTreeTime` set a post-flip `state_root` is a PBT root that
+/// addresses no MPT, so the download would hang or fail undebuggably.
+/// No auto-fallback to full sync — silent mode switches surprise operators;
+/// the error names the fix instead. PBT snap sync is tracked separately;
+/// until it exists, full sync (which is binary-tree aware) is the only
+/// supported mode on a scheduled chain.
+///
+/// Called with the FINALIZED chain config (after
+/// [`apply_binary_tree_overrides`], so both CLI activation flags and a
+/// genesis-JSON `binaryTreeTime` are covered) and the EFFECTIVE sync mode
+/// (`--dev` never p2p-syncs and always runs full, so it must not trip this).
+fn validate_sync_mode(config: &ChainConfig, syncmode: &SyncMode) -> eyre::Result<()> {
+    if config.binary_tree_scheduled() && *syncmode == SyncMode::Snap {
+        return Err(eyre::eyre!(
+            "snap sync is not supported on a binary-tree-scheduled chain (binaryTreeTime is set): \
+             snap sync downloads the MPT behind a pivot state root, but a post-flip state root \
+             is a binary-trie root that addresses no MPT; restart with --syncmode full"
+        ));
+    }
+    Ok(())
+}
+
 pub async fn init_l1(
     opts: Options,
     log_filter_handler: Option<reload::Handle<EnvFilter, Registry>>,
@@ -733,7 +812,16 @@ pub async fn init_l1(
         init_datadir(&datadir);
     }
 
-    let genesis = network.get_genesis()?;
+    let mut genesis = network.get_genesis()?;
+    apply_binary_tree_overrides(&mut genesis, &opts)?;
+    // `--dev` never p2p-syncs and its SyncManager is forced to full (see
+    // `init_rpc_api`), so validate the same effective mode it will run with.
+    let effective_syncmode = if opts.dev {
+        &SyncMode::Full
+    } else {
+        &opts.syncmode
+    };
+    validate_sync_mode(&genesis.config, effective_syncmode)?;
     display_chain_initialization(&genesis);
     debug!("Preloading KZG trusted setup");
     ethrex_crypto::kzg::warm_up_trusted_setup();
@@ -1015,8 +1103,12 @@ pub async fn regenerate_head_state(
 
     let mut current_last_header = last_header;
 
-    // Find the last block with a known state root
-    while !store.has_state_root(current_last_header.state_root)? {
+    // Find the last block with a known state root. The probe resolves the
+    // header's MPT lookup root first: under the experimental binary-tree
+    // commitment the header commits to the binary-trie root, and only blocks whose
+    // registry entry survived (genesis is reseeded on every boot) anchor the
+    // walk — the replay below re-derives the registry entries for the rest.
+    while !store.has_reconstructible_state(&current_last_header)? {
         if current_last_header.number == 0 {
             return Err(eyre::eyre!(
                 "Unknown state found in DB. Please run `ethrex removedb` and restart node"
@@ -1063,7 +1155,12 @@ pub async fn regenerate_head_state(
 
 #[cfg(test)]
 mod tests {
-    use super::{resolve_p2p_endpoints, validate_rpc_addrs};
+    use super::{
+        apply_binary_tree_overrides, resolve_p2p_endpoints, validate_rpc_addrs, validate_sync_mode,
+    };
+    use crate::cli::Options;
+    use ethrex_common::types::{ChainConfig, Genesis};
+    use ethrex_p2p::sync::SyncMode;
     use std::net::{IpAddr, SocketAddr};
 
     fn ip(s: &str) -> IpAddr {
@@ -1072,6 +1169,97 @@ mod tests {
 
     fn addr(s: &str) -> SocketAddr {
         s.parse().unwrap()
+    }
+
+    /// The experimental binary-tree CLI flags are sugar that writes the one
+    /// activation field, `binaryTreeTime`; on a genesis whose JSON already
+    /// sets it, either flag must be a hard error (explicit beats a silent
+    /// overwrite that would fork the node off peers honoring the file).
+    /// Control arms: on a clean genesis the sugar applies —
+    /// `--experimental.binary-tree` ⇒ `binaryTreeTime = genesis.timestamp`
+    /// (activation at genesis), `--experimental.binary-tree-delay N` ⇒
+    /// `genesis.timestamp + N`.
+    #[test]
+    fn binary_tree_cli_flags_reject_genesis_with_json_binary_tree_time() {
+        let mut genesis = Genesis {
+            timestamp: 1_700_000_000,
+            ..Default::default()
+        };
+        let genesis_flag = Options {
+            experimental_binary_tree: true,
+            ..Default::default()
+        };
+        let delay_flag = Options {
+            experimental_binary_tree_delay: Some(30),
+            ..Default::default()
+        };
+
+        // Control: clean genesis, sugar applies.
+        apply_binary_tree_overrides(&mut genesis, &genesis_flag)
+            .expect("flag on a clean genesis must apply");
+        assert_eq!(genesis.config.binary_tree_time, Some(genesis.timestamp));
+
+        // JSON time already present: both flags are hard errors, naming the
+        // field, its value, and the offending flag EXACTLY (`starts_with`
+        // because the delay flag contains the genesis flag as a prefix, so a
+        // bare `contains` would pass trivially on the wrong flag).
+        for (opts, expected_flag) in [
+            (&genesis_flag, "--experimental.binary-tree"),
+            (&delay_flag, "--experimental.binary-tree-delay"),
+        ] {
+            let err = apply_binary_tree_overrides(&mut genesis, opts)
+                .expect_err("a genesis JSON binaryTreeTime + a CLI flag must be rejected")
+                .to_string();
+            assert!(err.contains("binaryTreeTime: 1700000000"), "{err}");
+            assert!(
+                err.starts_with(&format!("{expected_flag} conflicts")),
+                "error must name the offending flag exactly ({expected_flag}), got: {err}"
+            );
+        }
+        // The rejected calls must not have mutated the schedule.
+        assert_eq!(genesis.config.binary_tree_time, Some(genesis.timestamp));
+
+        // Control: the delay flag schedules relative to genesis.
+        genesis.config.binary_tree_time = None;
+        apply_binary_tree_overrides(&mut genesis, &delay_flag)
+            .expect("delay on a clean genesis must apply");
+        assert_eq!(
+            genesis.config.binary_tree_time,
+            Some(genesis.timestamp + 30)
+        );
+
+        // No flags: untouched either way.
+        let mut unflagged = Genesis::default();
+        apply_binary_tree_overrides(&mut unflagged, &Options::default())
+            .expect("no flags is a no-op");
+        assert_eq!(unflagged.config.binary_tree_time, None);
+    }
+
+    /// Snap sync is MPT-shaped and binary-tree-unaware: on a scheduled chain
+    /// it would pivot on a header whose post-flip `state_root` is a PBT root
+    /// addressing no MPT — an undebuggable hang. Until PBT snap sync exists,
+    /// scheduled + snap must be a hard startup error naming the fix
+    /// (`--syncmode full`). Control arms: full sync on a scheduled chain and
+    /// snap sync on an unscheduled chain (today's default) must both start.
+    #[test]
+    fn binary_tree_scheduled_chain_refuses_snap_sync() {
+        let scheduled = ChainConfig {
+            binary_tree_time: Some(1_700_000_000),
+            ..Default::default()
+        };
+
+        let err = validate_sync_mode(&scheduled, &SyncMode::Snap)
+            .expect_err("a binary-tree-scheduled chain must refuse snap sync")
+            .to_string();
+        assert!(
+            err.contains("--syncmode full"),
+            "error must tell the operator the fix (--syncmode full), got: {err}"
+        );
+
+        validate_sync_mode(&scheduled, &SyncMode::Full)
+            .expect("full sync on a scheduled chain must start");
+        validate_sync_mode(&ChainConfig::default(), &SyncMode::Snap)
+            .expect("snap sync on an unscheduled chain must start");
     }
 
     /// The default layout (distinct ports) must validate.

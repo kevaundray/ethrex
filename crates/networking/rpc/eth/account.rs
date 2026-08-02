@@ -2,9 +2,18 @@ use serde_json::Value;
 use tracing::debug;
 
 use crate::rpc::{RpcApiContext, RpcHandler};
-use crate::types::account_proof::{AccountProof, StorageProof};
+use crate::types::account_proof::{
+    AccountProof, BINARY_ACCOUNT_PROOF_FORMAT, BinaryAccountLeafProofs, BinaryAccountProof,
+    BinaryStorageProof, BinaryTreeKeyProof, StorageProof,
+};
 use crate::types::block_identifier::{BlockIdentifierOrHash, BlockTag};
 use crate::utils::RpcErr;
+use ethrex_binary_trie::embedding::{
+    BASIC_DATA_VERSION, address20_to_address32, decode_basic_data, get_tree_key_for_basic_data,
+    get_tree_key_for_code_hash, get_tree_key_for_storage_slot,
+};
+use ethrex_binary_trie::trie::BinaryTrie;
+use ethrex_common::types::BlockHeader;
 use ethrex_common::{Address, BigEndianHash, H256, U256, serde_utils};
 
 pub struct GetBalanceRequest {
@@ -221,6 +230,18 @@ impl RpcHandler for GetProofRequest {
         let Some(header) = storage.get_block_header(block_number)? else {
             return Ok(Value::Null);
         };
+        // Experimental EIP-8297, per-block: when the commitment is active at
+        // the TARGET block's timestamp its header commits to the binary
+        // tree, which the MPT proof below cannot prove against, so the
+        // response switches to the pbt-getproof-v1 shape. Pre-activation
+        // (and unscheduled) blocks take the untouched MPT path — their
+        // headers carry the MPT root directly.
+        if storage
+            .get_chain_config()
+            .is_binary_tree_active(header.timestamp)
+        {
+            return self.handle_binary_tree(&context, &header);
+        }
         // Create account proof
         let Some(account_proof) = storage
             .get_account_proof(header.state_root, self.address, &self.storage_keys)
@@ -248,6 +269,101 @@ impl RpcHandler for GetProofRequest {
             storage_proof,
         };
         serde_json::to_value(account_proof).map_err(|error| RpcErr::Internal(error.to_string()))
+    }
+}
+
+impl GetProofRequest {
+    /// `eth_getProof` against the binary-tree commitment
+    /// (`pbt-getproof-v1`, see `docs/eip-draft-pbt-eth-getproof.md`):
+    /// materializes the block's `PbtState` snapshot into a trie and
+    /// serves per-tree-key preimage proofs for the account-header
+    /// leaves and every requested slot. Inclusion and exclusion come
+    /// from the same walk; absent leaves report `value: null` (or a
+    /// zero quantity for storage) alongside their exclusion proof.
+    fn handle_binary_tree(
+        &self,
+        context: &RpcApiContext,
+        header: &BlockHeader,
+    ) -> Result<Value, RpcErr> {
+        let block_hash = header.hash();
+        // Snapshots are in-memory only (Seam A registry): blocks
+        // imported before a restart, or beyond a future pruning
+        // horizon, have none — error clearly instead of proving
+        // against the wrong state.
+        let Some(pbt_state) = context.storage.get_pbt_state(block_hash)? else {
+            return Err(RpcErr::Internal(format!(
+                "no binary-tree state snapshot for block {block_hash:#x}: the PbtState \
+                 registry is in-memory (experimental EIP-8297) — re-import the chain from \
+                 genesis or seed a snapshot via Store::put_pbt_state"
+            )));
+        };
+        let trie = pbt_state
+            .build_trie()
+            .map_err(|e| RpcErr::Internal(format!("failed to build binary trie: {e}")))?;
+
+        let address32 = address20_to_address32(self.address);
+        let basic_data = prove_tree_key(&trie, get_tree_key_for_basic_data(&address32));
+        let code_hash_leaf = prove_tree_key(&trie, get_tree_key_for_code_hash(&address32));
+
+        // Decoded conveniences only; the proven leaf values are
+        // authoritative (absent leaves -> zero defaults).
+        let (nonce, balance) = match basic_data
+            .value
+            .as_ref()
+            .map(|leaf| decode_basic_data(&leaf.0))
+        {
+            // An unknown layout version must not be misread positionally:
+            // zero the conveniences and let consumers decode the proven leaf.
+            Some(decoded) if decoded.version == BASIC_DATA_VERSION => {
+                (decoded.nonce, decoded.balance)
+            }
+            _ => (0, U256::zero()),
+        };
+        let code_hash = code_hash_leaf.value.unwrap_or_default();
+
+        let storage_proof = self
+            .storage_keys
+            .iter()
+            .map(|slot| {
+                let key = slot.into_uint();
+                let leaf = prove_tree_key(&trie, get_tree_key_for_storage_slot(&address32, key));
+                BinaryStorageProof {
+                    key,
+                    value: leaf
+                        .value
+                        .map(|v| U256::from_big_endian(v.as_bytes()))
+                        .unwrap_or_default(),
+                    tree_key: leaf.tree_key,
+                    proof: leaf.proof,
+                }
+            })
+            .collect();
+
+        let response = BinaryAccountProof {
+            format: BINARY_ACCOUNT_PROOF_FORMAT,
+            address: self.address,
+            balance,
+            nonce,
+            code_hash,
+            storage_hash: None,
+            binary_account_proof: BinaryAccountLeafProofs {
+                basic_data,
+                code_hash: code_hash_leaf,
+            },
+            storage_proof,
+        };
+        serde_json::to_value(response).map_err(|error| RpcErr::Internal(error.to_string()))
+    }
+}
+
+/// Look up and prove one tree key against `trie`, pairing the leaf
+/// value (`None` when absent) with the matching inclusion/exclusion
+/// proof from the same walk.
+fn prove_tree_key(trie: &BinaryTrie, tree_key: Vec<u8>) -> BinaryTreeKeyProof {
+    BinaryTreeKeyProof {
+        value: trie.get(&tree_key).map(H256),
+        proof: trie.prove(&tree_key),
+        tree_key,
     }
 }
 

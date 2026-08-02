@@ -987,7 +987,23 @@ impl Blockchain {
             .apply_account_updates_batch(context.parent_hash(), &account_updates)?
             .ok_or(ChainError::ParentStateNotFound)?;
 
-        let state_root = ret_acount_updates_list.state_trie_hash;
+        let state_root = if context
+            .chain_config()
+            .is_binary_tree_active(context.payload.header.timestamp)
+        {
+            // Experimental EIP-8297: once active at the payload's timestamp
+            // the header must commit to the binary-trie root, not the MPT
+            // root. Extend the parent's snapshot with this payload's
+            // updates; the snapshot itself is NOT stored here — import is
+            // the only writer, when the block comes back through
+            // `store_block` (which also shadow-tracks pre-activation blocks;
+            // a pre-activation build needs nothing from the snapshot chain).
+            let (_pbt_state, binary_root) =
+                self.extended_pbt_state(context.parent_hash(), &account_updates)?;
+            binary_root
+        } else {
+            ret_acount_updates_list.state_trie_hash
+        };
 
         context.payload.header.state_root = state_root;
         context.payload.header.transactions_root =

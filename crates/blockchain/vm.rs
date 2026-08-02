@@ -39,26 +39,7 @@ pub struct StoreVmDatabase {
 
 impl StoreVmDatabase {
     pub fn new(store: Store, block_header: BlockHeader) -> Result<Self, EvmError> {
-        // If we don't have the state for the base, we want to fail in a clear way
-        // instead of eventually erroring due to one of the several errors that may
-        // happen as a result of executing from the wrong state
-        // This lets one easily tell apart an inconsistent state from a syncing issue
-        if !store
-            .has_state_root(block_header.state_root)
-            .map_err(|e| EvmError::DB(e.to_string()))?
-        {
-            return Err(EvmError::DB(format!(
-                "state root missing for block {} (state_root {:#x})",
-                block_header.number, block_header.state_root
-            )));
-        }
-        Ok(StoreVmDatabase {
-            store,
-            block_hash: block_header.hash(),
-            block_hash_cache: Arc::new(Mutex::new(BTreeMap::new())),
-            account_state_cache: Arc::new(RwLock::new(FxHashMap::default())),
-            state_root: block_header.state_root,
-        })
+        Self::new_with_block_hash_cache(store, block_header, BTreeMap::new())
     }
 
     pub fn new_with_block_hash_cache(
@@ -66,14 +47,24 @@ impl StoreVmDatabase {
         block_header: BlockHeader,
         block_hash_cache: BTreeMap<BlockNumber, BlockHash>,
     ) -> Result<Self, EvmError> {
-        // Fail clearly if prestate is missing. See `StoreVmDatabase::new` for details on why we want this
+        // The root under which the block's MPT state is stored: the header's
+        // state_root normally, or the side-registry entry under the
+        // experimental binary-tree commitment (the header then commits to the
+        // binary-tree root, which cannot address the MPT).
+        let state_root = store
+            .mpt_state_root_for_header(&block_header)
+            .map_err(|e| EvmError::DB(e.to_string()))?;
+        // If we don't have the state for the base, we want to fail in a clear way
+        // instead of eventually erroring due to one of the several errors that may
+        // happen as a result of executing from the wrong state
+        // This lets one easily tell apart an inconsistent state from a syncing issue
         if !store
-            .has_state_root(block_header.state_root)
+            .has_state_root(state_root)
             .map_err(|e| EvmError::DB(e.to_string()))?
         {
             return Err(EvmError::DB(format!(
                 "state root missing for block {} (state_root {:#x})",
-                block_header.number, block_header.state_root
+                block_header.number, state_root
             )));
         }
         Ok(StoreVmDatabase {
@@ -81,7 +72,7 @@ impl StoreVmDatabase {
             block_hash: block_header.hash(),
             block_hash_cache: Arc::new(Mutex::new(block_hash_cache)),
             account_state_cache: Arc::new(RwLock::new(FxHashMap::default())),
-            state_root: block_header.state_root,
+            state_root,
         })
     }
 

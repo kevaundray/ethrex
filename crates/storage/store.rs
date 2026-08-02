@@ -27,7 +27,7 @@ use ethrex_common::{
     types::{
         AccountInfo, AccountState, AccountUpdate, Block, BlockBody, BlockHash, BlockHeader,
         BlockNumber, ChainConfig, Code, CodeMetadata, ForkId, Genesis, GenesisAccount, Index,
-        Receipt, Transaction,
+        PbtState, PbtStateError, Receipt, Transaction,
         block_access_list::BlockAccessList,
         block_execution_witness::{ExecutionWitness, RpcExecutionWitness},
     },
@@ -215,6 +215,24 @@ pub struct Store {
     /// Cache for code metadata (code length), keyed by the bytecode hash.
     /// Uses FxHashMap for efficient lookups, much smaller than code cache.
     code_metadata_cache: Arc<Mutex<rustc_hash::FxHashMap<H256, CodeMetadata>>>,
+
+    /// Experimental EIP-8297 binary-tree state snapshots, keyed by block
+    /// hash. Maintained whenever the commitment is scheduled
+    /// (`ChainConfig::binary_tree_scheduled`): shadow tracking runs from
+    /// genesis so the first active block can commit the full carried-over
+    /// state. In-memory only; snapshots are never evicted in this phase.
+    pbt_states: Arc<Mutex<rustc_hash::FxHashMap<BlockHash, Arc<PbtState>>>>,
+
+    /// Experimental EIP-8297 companion to `pbt_states`: the MPT root under
+    /// which each block's state is persisted, keyed by block hash. Once the
+    /// commitment is active (`ChainConfig::is_binary_tree_active` at the
+    /// header timestamp), `header.state_root` commits to the binary-tree
+    /// root while the MPT remains the lookup structure — but MPT tries are
+    /// addressed by their root, which the header no longer carries, so it
+    /// must be recorded out of band (in-memory, same lifecycle as
+    /// `pbt_states`). Populated whenever scheduled (pre-activation entries
+    /// equal the header root); unused (empty) on unscheduled chains.
+    mpt_lookup_roots: Arc<Mutex<rustc_hash::FxHashMap<BlockHash, H256>>>,
 
     /// Serializes concurrent `forkchoice_update` callers so that the cache
     /// update and the DB write transaction remain mutually ordered.
@@ -1636,6 +1654,11 @@ impl Store {
     /// root. Used by `apply_updates` for both the live and full-sync paths (which
     /// share the single persist worker).
     fn batch_state_roots(&self, update_batch: &UpdateBatch) -> Result<(H256, H256), StoreError> {
+        // Both roots address MPT trie layers, so under the experimental
+        // binary-tree commitment they must be resolved through the lookup registry
+        // (the headers commit to binary-tree roots there). The last block's
+        // registry entry is recorded by `Blockchain::store_block` before the
+        // update batch is handed over.
         let parent_state_root = self
             .get_block_header_by_hash(
                 update_batch
@@ -1645,14 +1668,16 @@ impl Store {
                     .header
                     .parent_hash,
             )?
-            .map(|header| header.state_root)
+            .map(|header| self.mpt_state_root_for_header(&header))
+            .transpose()?
             .unwrap_or_default();
-        let last_state_root = update_batch
-            .blocks
-            .last()
-            .ok_or(StoreError::UpdateBatchNoBlocks)?
-            .header
-            .state_root;
+        let last_state_root = self.mpt_state_root_for_header(
+            &update_batch
+                .blocks
+                .last()
+                .ok_or(StoreError::UpdateBatchNoBlocks)?
+                .header,
+        )?;
         Ok((parent_state_root, last_state_root))
     }
 
@@ -1875,6 +1900,8 @@ impl Store {
             last_computed_flatkeyvalue: Arc::new(RwLock::new(last_written)),
             account_code_cache: Arc::new(Mutex::new(CodeCache::default())),
             code_metadata_cache: Arc::new(Mutex::new(rustc_hash::FxHashMap::default())),
+            pbt_states: Arc::new(Mutex::new(rustc_hash::FxHashMap::default())),
+            mpt_lookup_roots: Arc::new(Mutex::new(rustc_hash::FxHashMap::default())),
             fcu_lock: Arc::new(tokio::sync::Mutex::new(())),
             safe_commit_root,
             background_threads: Default::default(),
@@ -2547,6 +2574,215 @@ impl Store {
         }
     }
 
+    /// Returns the experimental EIP-8297 binary-tree state snapshot for
+    /// `block_hash`, if one has been stored. Populated from genesis onward
+    /// whenever the commitment is scheduled
+    /// (`ChainConfig::binary_tree_scheduled`).
+    pub fn get_pbt_state(
+        &self,
+        block_hash: BlockHash,
+    ) -> Result<Option<Arc<PbtState>>, StoreError> {
+        Ok(self
+            .pbt_states
+            .lock()
+            .map_err(|_| StoreError::LockError)?
+            .get(&block_hash)
+            .cloned())
+    }
+
+    /// Stores the experimental EIP-8297 binary-tree state snapshot for
+    /// `block_hash`.
+    ///
+    /// Besides the internal genesis seeding, this is also the offline-seeding
+    /// API for nodes that cannot replay from genesis. Nothing is validated at
+    /// insertion: a snapshot that differs from what replay would have
+    /// computed surfaces as a state-root mismatch on the next imported block,
+    /// so seeders must supply the exact replay-equivalent state.
+    pub fn put_pbt_state(&self, block_hash: BlockHash, state: PbtState) -> Result<(), StoreError> {
+        self.pbt_states
+            .lock()
+            .map_err(|_| StoreError::LockError)?
+            .insert(block_hash, Arc::new(state));
+        Ok(())
+    }
+
+    /// Experimental EIP-8297: derives the genesis `PbtState` snapshot from
+    /// the alloc and registers it. Shared by fresh-datadir init and the
+    /// matching-genesis reopen path, which must re-seed the in-memory
+    /// registry entries a restart wiped. Runs whenever the commitment is
+    /// *scheduled* (shadow tracking starts at genesis).
+    ///
+    /// `expected_header_root` carries the genesis header's state root when
+    /// the commitment is *active at the genesis timestamp* — only then does
+    /// the header commit the binary-tree root, so only then can the seeded
+    /// snapshot be checked against it. That root comes from this same
+    /// `from_genesis_alloc` + `compute_root` pipeline, so the mismatch check
+    /// is a funnel-consistency guard against the two paths diverging in
+    /// future edits, not independent verification. A scheduled-later genesis
+    /// passes `None`: its header commits the MPT root, which the snapshot's
+    /// binary root can never (and must never) match.
+    ///
+    /// `None` still validates that the alloc is *embeddable*, just not what
+    /// it hashes to. Computing the root is how the `Some` path incidentally
+    /// proves that; without an equivalent check the `None` path would accept
+    /// an alloc the binary tree cannot represent (a balance ≥ 2^128 does not
+    /// fit the 16-byte basic-data field) and fail for the first time at the
+    /// flip block — where every node fails to import, the chain halts, and
+    /// no genesis balance can be changed retroactively. Startup is the last
+    /// moment the operator can still fix it.
+    fn seed_genesis_pbt_snapshot(
+        &self,
+        genesis: &Genesis,
+        genesis_hash: BlockHash,
+        expected_header_root: Option<H256>,
+    ) -> Result<(), StoreError> {
+        let pbt_state = PbtState::from_genesis_alloc(&genesis.alloc);
+        match expected_header_root {
+            Some(header_state_root) => {
+                let pbt_root = pbt_state.compute_root()?;
+                if pbt_root != header_state_root {
+                    return Err(StoreError::Custom(format!(
+                        "binary-tree genesis root mismatch: computed {pbt_root:#x} but the genesis header commits to {header_state_root:#x}"
+                    )));
+                }
+            }
+            None => {
+                if let Err(err) = pbt_state.validate_embeddable() {
+                    return Err(StoreError::Custom(Self::unembeddable_genesis_message(
+                        genesis, &err,
+                    )));
+                }
+            }
+        }
+        self.put_pbt_state(genesis_hash, pbt_state)
+    }
+
+    /// Operator-facing explanation of an alloc the binary tree cannot
+    /// represent, on a chain whose commitment is scheduled for later.
+    /// Names the offending account when the cause is a balance, which is
+    /// the only embedding constraint a genesis alloc can plausibly trip
+    /// (the other, bytecode missing for a code hash, cannot arise from an
+    /// alloc — it carries its code inline).
+    fn unembeddable_genesis_message(genesis: &Genesis, err: &PbtStateError) -> String {
+        let limit = U256::one() << 128;
+        let offender = genesis
+            .alloc
+            .iter()
+            .find(|(_, account)| account.balance >= limit)
+            .map(|(address, account)| {
+                let balance = account.balance;
+                format!(" — account {address:#x} holds a balance of {balance}, at or above the 2^128 limit")
+            })
+            .unwrap_or_default();
+        let activation = genesis
+            .config
+            .binary_tree_time
+            .map(|time| time.to_string())
+            .unwrap_or_else(|| "unset".to_string());
+        format!(
+            "genesis alloc cannot be embedded in the experimental EIP-8297 binary tree: {err}{offender}. \
+             The binary-tree commitment is scheduled for timestamp {activation}, later than genesis, so \
+             the genesis header is unaffected — but the alloc is carried into the first active block, \
+             whose binary-tree root would then be uncomputable: every node fails to import that block \
+             and the chain halts at activation, with no way to change a genesis balance retroactively. \
+             Fix the genesis alloc now — every account balance must be below 2^128 (about 3.4e38 wei)."
+        )
+    }
+
+    /// Records the MPT root under which `block_hash`'s state is persisted.
+    /// Only meaningful when the EIP-8297 commitment is scheduled
+    /// (`ChainConfig::binary_tree_scheduled`); once active at a header's
+    /// timestamp, the header's `state_root` commits to the binary-tree root
+    /// and can no longer address the MPT lookup structure. Written at
+    /// genesis seeding and on every block import while scheduled.
+    pub fn put_mpt_lookup_root(
+        &self,
+        block_hash: BlockHash,
+        state_root: H256,
+    ) -> Result<(), StoreError> {
+        self.mpt_lookup_roots
+            .lock()
+            .map_err(|_| StoreError::LockError)?
+            .insert(block_hash, state_root);
+        Ok(())
+    }
+
+    /// Returns the recorded MPT lookup root for `block_hash`, if any.
+    /// See [`Store::put_mpt_lookup_root`].
+    pub fn get_mpt_lookup_root(&self, block_hash: BlockHash) -> Result<Option<H256>, StoreError> {
+        Ok(self
+            .mpt_lookup_roots
+            .lock()
+            .map_err(|_| StoreError::LockError)?
+            .get(&block_hash)
+            .copied())
+    }
+
+    /// Resolves the root under which `header`'s MPT state is stored: the
+    /// header's own `state_root` normally, or the side-registry entry when
+    /// the experimental EIP-8297 commitment is active at the header's
+    /// timestamp (the header then commits to the binary-tree root instead).
+    /// Errors for an active header when no entry was recorded — the MPT for
+    /// that block is unaddressable, which means the block was never imported
+    /// through this store instance.
+    pub fn mpt_state_root_for_header(&self, header: &BlockHeader) -> Result<H256, StoreError> {
+        self.mpt_state_root_for_header_opt(header)?.ok_or_else(|| {
+            let block_hash = header.hash();
+            StoreError::Custom(format!(
+                "missing MPT lookup root for block {block_hash:#x} (experimental binary-tree \
+                 commitment, in-memory only) — the block was not imported through this store; \
+                 restart requires re-import from genesis"
+            ))
+        })
+    }
+
+    /// Like [`Store::mpt_state_root_for_header`] but Option-shaped for
+    /// reachability probes: a missing registry entry means "this block's
+    /// state is not reconstructible right now" (restart before replay, or a
+    /// block we never imported) — probes must treat it exactly like an
+    /// unknown state root, not as an error.
+    ///
+    /// The resolution rule is PER-HEADER, not per-chain: the registry is
+    /// consulted only when the binary-tree commitment is active at the
+    /// header's own timestamp; any earlier header (including every header of
+    /// an unscheduled chain, and all pre-flip headers of a scheduled one)
+    /// resolves to its own `state_root`, which IS the MPT root. This keeps
+    /// pre-flip blocks readable across restarts without replay — the
+    /// in-memory registries don't survive a restart, but pre-flip headers
+    /// never need them.
+    pub fn mpt_state_root_for_header_opt(
+        &self,
+        header: &BlockHeader,
+    ) -> Result<Option<H256>, StoreError> {
+        if !self
+            .get_chain_config()
+            .is_binary_tree_active(header.timestamp)
+        {
+            return Ok(Some(header.state_root));
+        }
+        // `header.hash()` may recompute keccak for headers freshly decoded
+        // from the DB (the OnceLock cache only helps reused instances).
+        // Acceptable while the commitment is experimental — the inactive
+        // path above returns before hashing; revisit with a hash-taking
+        // variant when this hardens.
+        self.get_mpt_lookup_root(header.hash())
+    }
+
+    /// Whether `header`'s post-state can be constructed from this store:
+    /// resolves the header's MPT lookup root (the header's own `state_root`
+    /// normally, the side-registry entry when the experimental EIP-8297
+    /// commitment is active at the header's timestamp) and checks the MPT
+    /// layer for it is present. For an active header a missing registry
+    /// entry answers `false` — same meaning as a missing state root. Use
+    /// this instead of `has_state_root(header.state_root)` whenever the
+    /// root being probed comes from a block header.
+    pub fn has_reconstructible_state(&self, header: &BlockHeader) -> Result<bool, StoreError> {
+        match self.mpt_state_root_for_header_opt(header)? {
+            Some(state_root) => self.has_state_root(state_root),
+            None => Ok(false),
+        }
+    }
+
     pub async fn add_initial_state(&mut self, genesis: Genesis) -> Result<(), StoreError> {
         self.add_initial_state_inner(genesis, false).await
     }
@@ -2605,10 +2841,46 @@ impl Store {
                     stored_genesis = %header.hash(),
                     "Skipping genesis state validation; trusting the genesis header and state already stored in the datadir"
                 );
+                // Experimental EIP-8297: no registry re-seeding here — the
+                // genesis file's alloc is not trusted to describe the stored
+                // state (it is typically empty in this flow), so nothing can
+                // be derived. A binary-scheduled skip-validation datadir needs offline
+                // seeding via `put_pbt_state` / `put_mpt_lookup_root`.
                 return Ok(());
             }
             Some(header) if header.hash() == genesis_hash => {
                 info!("Received genesis file matching a previously stored one, nothing to do");
+                // Experimental EIP-8297: the PbtState / MPT-lookup registries
+                // are in-memory and did not survive the restart, so a reopened
+                // datadir must re-seed the genesis entries (blocks past
+                // genesis still require replay — see the missing-entry error
+                // in `mpt_state_root_for_header`). Same derivations as the
+                // fresh-datadir path below.
+                if genesis.config.binary_tree_scheduled() {
+                    // Funnel-consistency check only when the commitment is
+                    // active AT genesis: a scheduled-later genesis header
+                    // commits the MPT root, which the snapshot's binary root
+                    // must not be compared against.
+                    self.seed_genesis_pbt_snapshot(
+                        &genesis,
+                        genesis_hash,
+                        genesis
+                            .config
+                            .is_binary_tree_active(genesis.timestamp)
+                            .then_some(genesis_block.header.state_root),
+                    )?;
+                    // Deterministic recomputation over verified input: this
+                    // branch only runs when header.hash() == genesis_hash,
+                    // which pins the alloc, and equivalence with the
+                    // fresh-init value is asserted by the rocksdb restart
+                    // test. No has_state_root guard: the genesis MPT layer is
+                    // legitimately pruned past DB_COMMIT_THRESHOLD — the
+                    // registry entry is an addressing record, not a liveness
+                    // claim. Recorded whenever scheduled: pre-activation it
+                    // equals the header root (harmless identity), keeping the
+                    // registry uniform across the flip.
+                    self.put_mpt_lookup_root(genesis_hash, genesis.compute_mpt_state_root())?;
+                }
                 return Ok(());
             }
             Some(_) => {
@@ -2622,10 +2894,43 @@ impl Store {
                     .await?
             }
         }
+        // Experimental EIP-8297: when the commitment is scheduled (whether
+        // active at genesis or later), seed the binary-tree snapshot for the
+        // genesis block — shadow tracking starts here. Built by borrowing
+        // the alloc before it moves into the MPT setup below; the MPT is
+        // still built as the lookup structure. The snapshot-vs-header
+        // funnel check applies only when active AT genesis (a
+        // scheduled-later genesis header commits the MPT root).
+        if genesis.config.binary_tree_scheduled() {
+            self.seed_genesis_pbt_snapshot(
+                &genesis,
+                genesis_hash,
+                genesis
+                    .config
+                    .is_binary_tree_active(genesis.timestamp)
+                    .then_some(genesis_block.header.state_root),
+            )?;
+        }
+
         // Store genesis accounts
         // TODO: Should we use this root instead of computing it before the block hash check?
         let genesis_state_root = self.setup_genesis_state_trie(genesis.alloc).await?;
-        debug_assert_eq!(genesis_state_root, genesis_block.header.state_root);
+        // When the commitment is active at genesis the header commits to the
+        // binary-tree root (verified above), not the MPT root, so the
+        // MPT-root-equals-header assert only holds while inactive. The MPT
+        // root is recorded out of band whenever scheduled so the lookup
+        // structure stays addressable across the flip (pre-activation the
+        // entry equals the header root — a harmless identity that keeps the
+        // registry uniform).
+        if genesis.config.binary_tree_scheduled() {
+            self.put_mpt_lookup_root(genesis_hash, genesis_state_root)?;
+        }
+        if !genesis
+            .config
+            .is_binary_tree_active(genesis_block.header.timestamp)
+        {
+            debug_assert_eq!(genesis_state_root, genesis_block.header.state_root);
+        }
 
         // Store genesis block
         info!(hash = %genesis_hash, "Storing genesis block");
@@ -2657,7 +2962,15 @@ impl Store {
         storage_key: H256,
     ) -> Result<Option<U256>, StoreError> {
         match self.get_block_header(block_number)? {
-            Some(header) => self.get_storage_at_root(header.state_root, address, storage_key),
+            // Resolves to `header.state_root` unless the experimental
+            // binary-tree commitment redirects the MPT lookup through the side
+            // registry (the header then commits to the binary-tree root,
+            // which addresses no MPT).
+            Some(header) => self.get_storage_at_root(
+                self.mpt_state_root_for_header(&header)?,
+                address,
+                storage_key,
+            ),
             None => Ok(None),
         }
     }
@@ -2860,7 +3173,11 @@ impl Store {
         let Some(header) = self.get_block_header_by_hash(hash)? else {
             return Ok(None);
         };
-        Ok(Some(header.state_root))
+        // The safe-commit cell is compared against MPT layer roots, so under
+        // the experimental binary-tree commitment the target's root must resolve
+        // through the side registry — the raw header root is a PBT root that
+        // matches no layer, which would leave the backlog unflushed forever.
+        Ok(Some(self.mpt_state_root_for_header(&header)?))
     }
 
     /// Obtain the storage trie for the given block
@@ -2868,7 +3185,11 @@ impl Store {
         let Some(header) = self.get_block_header_by_hash(block_hash)? else {
             return Ok(None);
         };
-        Ok(Some(self.open_state_trie(header.state_root)?))
+        // Resolves to `header.state_root` unless the experimental binary-tree
+        // commitment redirects the MPT lookup through the side registry.
+        Ok(Some(self.open_state_trie(
+            self.mpt_state_root_for_header(&header)?,
+        )?))
     }
 
     /// Obtain the storage trie for the given account on the given block
@@ -2880,10 +3201,14 @@ impl Store {
         let Some(header) = self.get_block_header_by_hash(block_hash)? else {
             return Ok(None);
         };
+        // Resolves to `header.state_root` unless the experimental binary-tree
+        // commitment redirects the MPT lookup through the side registry. The same
+        // resolved root must anchor BOTH trie opens below: the layer cache is
+        // keyed by MPT roots, so a raw (PBT) header root would silently miss
+        // every uncommitted layer.
+        let mpt_root = self.mpt_state_root_for_header(&header)?;
         // Fetch Account from state_trie
-        let Some(state_trie) = self.state_trie(block_hash)? else {
-            return Ok(None);
-        };
+        let state_trie = self.open_state_trie(mpt_root)?;
         let hashed_address = hash_address_fixed(&address);
         let Some(encoded_account) = state_trie.get(hashed_address.as_bytes())? else {
             return Ok(None);
@@ -2893,7 +3218,7 @@ impl Store {
         let storage_root = account.storage_root;
         Ok(Some(self.open_storage_trie(
             hashed_address,
-            header.state_root,
+            mpt_root,
             storage_root,
         )?))
     }
@@ -4594,5 +4919,237 @@ mod datadir_tests {
         fs::create_dir(dir.path().join("CURRENT")).unwrap();
         fs::create_dir(dir.path().join("MANIFEST-000001")).unwrap();
         assert!(!dir_contains_legacy_db(dir.path()).unwrap());
+    }
+}
+
+#[cfg(test)]
+mod pbt_genesis_tests {
+    use super::*;
+    use ethrex_common::Bytes;
+    use ethrex_common::types::Genesis;
+
+    fn small_alloc() -> BTreeMap<Address, GenesisAccount> {
+        let mut alloc = BTreeMap::new();
+        alloc.insert(
+            Address::from_low_u64_be(0xaa),
+            GenesisAccount {
+                code: Bytes::new(),
+                storage: BTreeMap::new(),
+                balance: U256::from(1_000u64),
+                nonce: 1,
+            },
+        );
+        let mut storage = BTreeMap::new();
+        storage.insert(U256::from(1), U256::from(7));
+        alloc.insert(
+            Address::from_low_u64_be(0xbb),
+            GenesisAccount {
+                code: Bytes::from_static(&[0x60, 0x01]),
+                storage,
+                balance: U256::from(2u64),
+                nonce: 0,
+            },
+        );
+        alloc
+    }
+
+    /// Genesis with the EIP-8297 commitment active from genesis
+    /// (`binaryTreeTime: 0`, at/before the default genesis timestamp).
+    fn binary_at_genesis() -> Genesis {
+        let mut genesis = Genesis {
+            alloc: small_alloc(),
+            ..Default::default()
+        };
+        genesis.config.binary_tree_time = Some(0);
+        genesis
+    }
+
+    /// Address of the account the balance-limit tests over-fund.
+    const OVERFUNDED: u64 = 0xcc;
+
+    /// [`small_alloc`] plus an EOA at [`OVERFUNDED`] holding `balance`.
+    fn alloc_with_balance(balance: U256) -> BTreeMap<Address, GenesisAccount> {
+        let mut alloc = small_alloc();
+        alloc.insert(
+            Address::from_low_u64_be(OVERFUNDED),
+            GenesisAccount {
+                code: Bytes::new(),
+                storage: BTreeMap::new(),
+                balance,
+                nonce: 0,
+            },
+        );
+        alloc
+    }
+
+    /// Genesis whose commitment flips well after the genesis timestamp:
+    /// scheduled, but the genesis header still commits the MPT root.
+    fn binary_scheduled_later(alloc: BTreeMap<Address, GenesisAccount>) -> Genesis {
+        let mut genesis = Genesis {
+            alloc,
+            ..Default::default()
+        };
+        genesis.config.binary_tree_time = Some(1_000_000);
+        assert!(
+            !genesis.config.is_binary_tree_active(genesis.timestamp),
+            "test fixture must be scheduled but not active at genesis"
+        );
+        genesis
+    }
+
+    /// The alloc, not transactions, is the realistic source of a balance
+    /// the binary-tree basic-data field cannot hold. On a scheduled-later
+    /// chain nothing used to look at it until the flip block, where every
+    /// node would fail to import — so this must fail at startup instead.
+    #[tokio::test]
+    async fn scheduled_later_genesis_rejects_alloc_balance_over_the_binary_tree_limit() {
+        let mut store =
+            Store::new("test-pbt-overfunded", EngineType::InMemory).expect("in-memory store");
+
+        let err = store
+            .add_initial_state(binary_scheduled_later(alloc_with_balance(
+                U256::one() << 128,
+            )))
+            .await
+            .expect_err("an unembeddable genesis alloc must be rejected at startup");
+
+        let message = err.to_string();
+        assert!(
+            message.contains("binary-tree"),
+            "error must name the binary-tree commitment: {message}"
+        );
+        assert!(
+            message.contains("balance") || message.contains("Balance"),
+            "error must point at the balance constraint: {message}"
+        );
+        assert!(
+            message.contains(&format!("{:#x}", Address::from_low_u64_be(OVERFUNDED))),
+            "error must name the offending account so an operator can fix it: {message}"
+        );
+    }
+
+    /// The largest balance the 16-byte basic-data field holds is fine:
+    /// the guard must reject only what the embedding truly cannot take.
+    #[tokio::test]
+    async fn scheduled_later_genesis_accepts_the_maximum_embeddable_balance() {
+        let mut store =
+            Store::new("test-pbt-max-balance", EngineType::InMemory).expect("in-memory store");
+        store
+            .add_initial_state(binary_scheduled_later(alloc_with_balance(
+                (U256::one() << 128) - 1,
+            )))
+            .await
+            .expect("a balance at the embedding limit must initialize");
+    }
+
+    /// No `binaryTreeTime` means no binary-tree involvement at all: an
+    /// over-large balance stays legal, exactly as before this guard.
+    #[tokio::test]
+    async fn unscheduled_genesis_accepts_balance_over_the_binary_tree_limit() {
+        let mut store =
+            Store::new("test-pbt-unscheduled-huge", EngineType::InMemory).expect("in-memory store");
+        let genesis = Genesis {
+            alloc: alloc_with_balance(U256::one() << 128),
+            ..Default::default()
+        };
+        assert!(!genesis.config.binary_tree_scheduled());
+        store
+            .add_initial_state(genesis)
+            .await
+            .expect("an unscheduled chain must not care about binary-tree constraints");
+    }
+
+    /// Genesis activation already refused an unembeddable alloc, via the
+    /// root the genesis header commits to (`Genesis::compute_state_root`
+    /// has no error channel, so it fails loudly rather than as an `Err`).
+    /// Pinned here so the two activation modes stay symmetric.
+    #[tokio::test]
+    #[should_panic(expected = "genesis alloc must satisfy binary-tree constraints")]
+    async fn genesis_activated_alloc_over_the_limit_still_fails_at_startup() {
+        let mut store =
+            Store::new("test-pbt-active-huge", EngineType::InMemory).expect("in-memory store");
+        let mut genesis = Genesis {
+            alloc: alloc_with_balance(U256::one() << 128),
+            ..Default::default()
+        };
+        genesis.config.binary_tree_time = Some(0);
+        let _ = store.add_initial_state(genesis).await;
+    }
+
+    #[tokio::test]
+    async fn add_initial_state_seeds_genesis_pbt_snapshot_when_active_at_genesis() {
+        let mut store = Store::new("test-pbt", EngineType::InMemory).expect("in-memory store");
+        let genesis = binary_at_genesis();
+        let genesis_block = genesis.get_block();
+        let genesis_hash = genesis_block.hash();
+
+        store
+            .add_initial_state(genesis)
+            .await
+            .expect("genesis-activated genesis must initialize");
+
+        let state = store
+            .get_pbt_state(genesis_hash)
+            .expect("registry lookup")
+            .expect("genesis-activated genesis must seed a binary-tree snapshot");
+        assert_eq!(
+            state.compute_root().expect("snapshot root"),
+            genesis_block.header.state_root,
+            "snapshot root must equal the genesis header's state_root"
+        );
+    }
+
+    #[tokio::test]
+    async fn add_initial_state_unscheduled_seeds_no_pbt_snapshot() {
+        let mut store = Store::new("test-pbt-off", EngineType::InMemory).expect("in-memory store");
+        let genesis = Genesis {
+            alloc: small_alloc(),
+            ..Default::default()
+        };
+        let genesis_hash = genesis.get_block().hash();
+
+        store
+            .add_initial_state(genesis)
+            .await
+            .expect("unscheduled genesis must initialize");
+
+        assert!(
+            store
+                .get_pbt_state(genesis_hash)
+                .expect("registry lookup")
+                .is_none(),
+            "no snapshot may be seeded on an unscheduled chain"
+        );
+    }
+
+    #[tokio::test]
+    async fn binarytree_fixture_boots_and_snapshot_matches_header_root() {
+        let file = std::fs::File::open("../../fixtures/genesis/l1-binarytree.json")
+            .expect("l1-binarytree.json fixture must exist");
+        let genesis: Genesis = serde_json::from_reader(std::io::BufReader::new(file))
+            .expect("fixture must deserialize");
+        assert!(
+            genesis.config.is_binary_tree_active(genesis.timestamp),
+            "fixture must activate the binary tree at genesis \
+             (binaryTreeTime at or before the genesis timestamp)"
+        );
+        let genesis_block = genesis.get_block();
+        let genesis_hash = genesis_block.hash();
+
+        let mut store =
+            Store::new("test-pbt-fixture", EngineType::InMemory).expect("in-memory store");
+        store
+            .add_initial_state(genesis)
+            .await
+            .expect("fixture genesis must initialize");
+
+        let state = store
+            .get_pbt_state(genesis_hash)
+            .expect("registry lookup")
+            .expect("fixture genesis must seed a binary-tree snapshot");
+        assert_eq!(
+            state.compute_root().expect("snapshot root"),
+            genesis_block.header.state_root,
+        );
     }
 }
